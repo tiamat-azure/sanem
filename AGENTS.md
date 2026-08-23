@@ -8,18 +8,25 @@ Tailscale Funnel. Single shared password, no accounts, no file management featur
 PRD.md §1 for full scope and explicit out-of-scope items).
 
 **PRD.md is the binding specification.** Technical choices marked "imposé" in it are
-locked; do not deviate without asking the project owner first.
+locked; do not deviate without asking the project owner first. The `Makefile` is one
+explicitly approved exception to the PRD §3 file tree (operational convenience, added on
+request).
 
 ## Commands
+
+A `Makefile` wraps the common operations; run `make help` for the full list (`start`,
+`stop`, `restart`, `status`, `logs`, `build`, `test`, `lint`, `funnel-start`,
+`funnel-stop`, `funnel-status`). Prefer it over raw `docker compose`/`tailscale`
+invocations.
 
 ```bash
 npm install
 npm start          # node src/server.js - requires SANEM_PASSWORD and
                     # SANEM_SESSION_SECRET env vars, see .env.example
-npm test           # node --test - unit + integration tests
-npm run lint        # eslint .
+make test           # node --test - unit + integration tests
+make lint            # eslint .
 
-docker compose up --build   # full stack, reads .env
+make start           # full stack via docker compose, reads .env
 ```
 
 ## Architecture

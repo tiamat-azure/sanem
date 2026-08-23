@@ -17,10 +17,28 @@ cp .env.example .env
 # éditer .env : définir SANEM_PASSWORD et SANEM_SESSION_SECRET
 #   openssl rand -base64 48   # pour générer SANEM_SESSION_SECRET
 
-docker compose up --build -d
+make start   # équivaut à : docker compose up -d --build
 ```
 
 Le service écoute en local sur le port `3900` (configurable via `SANEM_PORT`).
+
+## Commandes (`Makefile`)
+
+Un `Makefile` regroupe les opérations courantes ; `make help` liste toutes les cibles.
+
+| Commande             | Effet                                                               |
+| -------------------- | ------------------------------------------------------------------- |
+| `make start`         | Construit et démarre le conteneur (`docker compose up -d --build`). |
+| `make stop`          | Arrête et supprime le conteneur (`docker compose down`).            |
+| `make restart`       | Enchaîne `stop` puis `start`.                                       |
+| `make status`        | Affiche l'état du conteneur (`docker compose ps`).                  |
+| `make logs`          | Suit les logs en continu (`docker compose logs -f sanem`).          |
+| `make build`         | Construit l'image sans démarrer le conteneur.                       |
+| `make test`          | Lance la suite de tests (`npm test`).                               |
+| `make lint`          | Lance eslint (`npm run lint`).                                      |
+| `make funnel-start`  | Expose le service sur internet via Tailscale Funnel.                |
+| `make funnel-stop`   | Coupe l'exposition Funnel.                                          |
+| `make funnel-status` | Affiche l'état de la configuration Funnel/Serve.                    |
 
 ## Configuration (`.env`)
 
@@ -32,26 +50,33 @@ Le service écoute en local sur le port `3900` (configurable via `SANEM_PORT`).
 | `SANEM_TMP_TTL_HOURS`  | Délai avant qu'un upload inachevé soit nettoyé. Défaut : `48`.  |
 | `SANEM_MAX_FILE_GB`    | Taille maximale par fichier. Défaut : `20`.                     |
 
+`docker-compose.yml` accepte aussi `SANEM_DATA_DIR_HOST` (variable de déploiement, hors
+application) pour forcer le chemin hôte du volume de stockage si la résolution de
+`${HOME}` est peu fiable (par exemple avec un Docker installé en snap, qui redirige
+certains montages sous `$HOME` vers son propre bac à sable).
+
 ## Exposition sur internet (Tailscale Funnel)
 
 ```bash
-tailscale funnel 3900
+make funnel-start   # équivaut à : tailscale funnel --bg --https=10000 3900
+make funnel-status  # tailscale funnel status
+make funnel-stop    # tailscale funnel --https=10000 off
 ```
 
-Ceci expose le port local `3900` sur le port public **443** de l'URL Funnel de la machine
-(`https://<machine>.<tailnet>.ts.net`). Funnel n'écoute publiquement que sur les ports
-443, 8443 ou 10000 : ne jamais tenter d'exposer directement le port 3900.
+Ceci expose le port local `3900` sur un port public autorisé de l'URL Funnel de la machine
+(`https://<machine>.<tailnet>.ts.net:<port>`). Funnel n'écoute publiquement que sur les
+ports **443, 8443 ou 10000** : ne jamais tenter d'exposer directement le port 3900. Le
+port par défaut du `Makefile` est `10000` (le 443 étant déjà utilisé par un autre service
+Funnel sur cette machine) ; adapter `--https=<port>` dans le `Makefile` si besoin.
 
-Pour lancer en arrière-plan et vérifier l'état :
+### Désactiver temporairement l'exposition ou la connectivité Tailscale
 
-```bash
-tailscale funnel --bg 3900
-tailscale funnel status
-```
-
-> Si le port public 443 est déjà utilisé par un autre service Funnel sur cette machine,
-> utiliser un autre port public autorisé, par exemple :
-> `tailscale funnel --bg --https=10000 3900`.
+- Couper uniquement le Funnel (le service reste joignable en local et sur le tailnet) :
+  `make funnel-stop`.
+- Déconnecter complètement la machine du tailnet, temporairement (reconnexion instantanée
+  avec `sudo tailscale up`) : `sudo tailscale down`. Le Funnel devient alors inaccessible
+  tant que la machine est déconnectée, et devra être relancé (`make funnel-start`) après
+  reconnexion.
 
 ## Fichiers reçus
 
@@ -75,8 +100,8 @@ vide en dehors des transferts actifs.
 
 ```bash
 npm install
-npm test    # tests unitaires + test d'intégration de reprise
-npm run lint
+make test    # ou : npm test — tests unitaires + test d'intégration de reprise
+make lint    # ou : npm run lint
 ```
 
 Voir `AGENTS.md` pour le contexte destiné aux agents de code, et `PRD.md` pour la
