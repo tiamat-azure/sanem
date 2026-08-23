@@ -58,16 +58,17 @@ certains montages sous `$HOME` vers son propre bac à sable).
 ## Exposition sur internet (Tailscale Funnel)
 
 ```bash
-make funnel-start   # équivaut à : tailscale funnel --bg --https=10000 3900
+make funnel-start   # équivaut à : tailscale funnel --bg --https=443 3900
 make funnel-status  # tailscale funnel status
-make funnel-stop    # tailscale funnel --https=10000 off
+make funnel-stop    # tailscale funnel --https=443 off
 ```
 
 Ceci expose le port local `3900` sur un port public autorisé de l'URL Funnel de la machine
 (`https://<machine>.<tailnet>.ts.net:<port>`). Funnel n'écoute publiquement que sur les
 ports **443, 8443 ou 10000** : ne jamais tenter d'exposer directement le port 3900. Le
-port par défaut du `Makefile` est `10000` (le 443 étant déjà utilisé par un autre service
-Funnel sur cette machine) ; adapter `--https=<port>` dans le `Makefile` si besoin.
+port par défaut du `Makefile` est `443` (port HTTPS standard, franchit les
+firewalls/proxys restrictifs qui bloquent les ports non standards) ; adapter
+`--https=<port>` dans le `Makefile` si besoin.
 
 ### Désactiver temporairement l'exposition ou la connectivité Tailscale
 

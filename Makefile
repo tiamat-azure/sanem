@@ -29,10 +29,10 @@ lint: ## Run eslint
 	npm run lint
 
 funnel-start: ## Expose the local service on the public internet via Tailscale Funnel
-	tailscale funnel --bg --https=10000 3900
+	tailscale funnel --bg --https=443 3900
 
 funnel-stop: ## Stop the Tailscale Funnel exposure
-	tailscale funnel --https=10000 off
+	tailscale funnel --https=443 off
 
 funnel-status: ## Show current Tailscale Funnel/Serve configuration
 	tailscale funnel status
