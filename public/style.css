@@ -1,0 +1,232 @@
+:root[data-theme='dark'] {
+  --bg: #0b0d17;
+  --bg-elevated: #131629;
+  --text: #e8e9f5;
+  --text-dim: #9a9dc2;
+  --accent: #00f0ff;
+  --accent-2: #ff2ee6;
+  --accent-3: #7c4dff;
+  --border: #2a2d4a;
+  --danger: #ff4d6d;
+  --glow: 0 0 8px, 0 0 20px;
+}
+
+:root[data-theme='light'] {
+  --bg: #f4f5fb;
+  --bg-elevated: #ffffff;
+  --text: #14162b;
+  --text-dim: #565a80;
+  --accent: #0086a8;
+  --accent-2: #b3009e;
+  --accent-3: #5433c9;
+  --border: #d8daef;
+  --danger: #c8264a;
+  --glow: 0 0 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  transition: background 0.2s, color 0.2s;
+}
+
+/* Must win over #login-screen/#app-screen's own `display` declarations
+   below, which share the same specificity otherwise (ID selector). */
+.screen[hidden] {
+  display: none !important;
+}
+
+/* --- Login --- */
+
+#login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.login-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px;
+  width: min(360px, 100%);
+  text-align: center;
+  box-shadow: var(--glow) rgba(0, 240, 255, 0.15);
+}
+
+.login-card h1 {
+  margin: 0 0 4px;
+  font-size: 1.8rem;
+}
+
+.tagline {
+  color: var(--text-dim);
+  margin: 0 0 24px;
+}
+
+.login-card label {
+  display: block;
+  text-align: left;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.login-card input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1rem;
+  margin-bottom: 18px;
+}
+
+.login-card input:focus {
+  outline: 2px solid var(--accent);
+}
+
+.login-card button,
+.header-actions button {
+  cursor: pointer;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 18px;
+  font-size: 1rem;
+  font-weight: 600;
+  background: linear-gradient(135deg, var(--accent), var(--accent-3));
+  color: #05060d;
+  box-shadow: var(--glow) rgba(0, 240, 255, 0.35);
+  transition: transform 0.1s;
+}
+
+.login-card button {
+  width: 100%;
+}
+
+.login-card button:hover,
+.header-actions button:hover {
+  transform: translateY(-1px);
+}
+
+.error-message {
+  color: var(--danger);
+  font-size: 0.9rem;
+  margin-top: -4px;
+}
+
+/* --- App --- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  text-shadow: var(--glow) var(--accent-2);
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.header-actions button {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+#theme-toggle {
+  background: transparent;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+.files-section {
+  margin-top: 32px;
+}
+
+.files-section h2 {
+  font-size: 1.1rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+
+.file-name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.file-meta {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.empty-message {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* --- Uppy neon accents --- */
+
+.uppy-Dashboard-progressBarContainer,
+.uppy-StatusBar-progress {
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+
+.uppy-Root {
+  color-scheme: dark;
+}
+
+@media (max-width: 480px) {
+  .app-header {
+    padding: 12px 16px;
+  }
+  .app-header h1 {
+    font-size: 1.15rem;
+  }
+}

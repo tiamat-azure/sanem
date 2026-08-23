@@ -1,0 +1,20 @@
+services:
+  sanem:
+    build: .
+    container_name: sanem
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "${SANEM_PORT:-3900}:3900"
+    environment:
+      - SANEM_PORT=3900
+      - SANEM_DATA_DIR=/data
+      - SANEM_PASSWORD=${SANEM_PASSWORD}
+      - SANEM_SESSION_SECRET=${SANEM_SESSION_SECRET}
+      - SANEM_TMP_TTL_HOURS=${SANEM_TMP_TTL_HOURS:-48}
+      - SANEM_MAX_FILE_GB=${SANEM_MAX_FILE_GB:-20}
+    volumes:
+      # ${SANEM_DATA_DIR_HOST} lets deployments override the host path when
+      # ${HOME} resolution is unreliable (e.g. snap-packaged Docker
+      # redirecting bind-mount sources under $HOME to its own sandbox dir).
+      - ${SANEM_DATA_DIR_HOST:-${HOME}/sanem-data}:/data

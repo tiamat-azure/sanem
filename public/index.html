@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sanem</title>
+    <link rel="stylesheet" href="https://releases.transloadit.com/uppy/v5.2.4/uppy.min.css" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body data-max-file-gb="%%MAX_FILE_GB%%">
+    <div id="login-screen" class="screen" hidden>
+      <form id="login-form" class="login-card">
+        <h1>📦 Sanem</h1>
+        <p class="tagline">Dépose tes fichiers, on s'occupe du reste.</p>
+        <label for="password">Mot de passe</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required />
+        <button type="submit">Entrer</button>
+        <p id="login-error" class="error-message" role="alert" hidden></p>
+      </form>
+    </div>
+
+    <div id="app-screen" class="screen" hidden>
+      <header class="app-header">
+        <h1>📦 Sanem</h1>
+        <div class="header-actions">
+          <button id="theme-toggle" type="button" title="Changer de thème">🌓</button>
+          <button id="logout-button" type="button">Déconnexion</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="dashboard-container" aria-label="Zone d'envoi de fichiers"></section>
+
+        <section class="files-section">
+          <h2>Fichiers disponibles</h2>
+          <ul id="files-list" class="files-list"></ul>
+          <p id="files-empty" class="empty-message" hidden>Aucun fichier pour le moment.</p>
+        </section>
+      </main>
+    </div>
+
+    <script src="https://releases.transloadit.com/uppy/v5.2.4/uppy.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
