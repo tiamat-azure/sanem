@@ -1,4 +1,5 @@
-// GET /api/files: lists finalized uploads.
+// GET /api/files: lists finalized uploads, sorted alphabetically by name
+// (locale-aware, numeric so E2 sorts before E10).
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -33,6 +34,6 @@ filesRouter.get('/files', requireSession, async (req, res) => {
     });
   }
 
-  files.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  files.sort((a, b) => a.name.localeCompare(b.name, 'fr', { numeric: true, sensitivity: 'base' }));
   res.json(files);
 });

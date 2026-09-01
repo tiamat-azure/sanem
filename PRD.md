@@ -187,14 +187,14 @@ permet la reprise.
 
 ## 8. API backend
 
-| Méthode | Route                  | Auth | Description                                                                                               |
-| ------- | ---------------------- | ---- | --------------------------------------------------------------------------------------------------------- |
-| `GET`   | `/`                    | non  | Sert `public/index.html`. La page décide seule quoi afficher via `/api/session`.                          |
-| `GET`   | `/api/session`         | non  | `{ authenticated: boolean }`. Permet à l'UI de choisir écran de login ou page d'upload.                   |
-| `POST`  | `/api/login`           | non  | Body `{ password }`. Si correct : pose le cookie de session, renvoie `204`. Sinon `401`. **Rate-limité.** |
-| `POST`  | `/api/logout`          | oui  | Détruit la session, renvoie `204`.                                                                        |
-| `GET`   | `/api/files`           | oui  | `[{ name, size, uploadedAt }]` trié par date décroissante. Ignore les fichiers cachés.                    |
-| `ALL`   | `/files` et `/files/*` | oui  | Endpoint tus.                                                                                             |
+| Méthode | Route                  | Auth | Description                                                                                                            |
+| ------- | ---------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------- |
+| `GET`   | `/`                    | non  | Sert `public/index.html`. La page décide seule quoi afficher via `/api/session`.                                       |
+| `GET`   | `/api/session`         | non  | `{ authenticated: boolean }`. Permet à l'UI de choisir écran de login ou page d'upload.                                |
+| `POST`  | `/api/login`           | non  | Body `{ password }`. Si correct : pose le cookie de session, renvoie `204`. Sinon `401`. **Rate-limité.**              |
+| `POST`  | `/api/logout`          | oui  | Détruit la session, renvoie `204`.                                                                                     |
+| `GET`   | `/api/files`           | oui  | `[{ name, size, uploadedAt }]` trié par nom, ordre alphabétique (locale-aware, numérique). Ignore les fichiers cachés. |
+| `ALL`   | `/files` et `/files/*` | oui  | Endpoint tus.                                                                                                          |
 
 ### Session
 
