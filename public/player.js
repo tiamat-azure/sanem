@@ -521,9 +521,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   showBar();
   render();
   container.addEventListener('pointermove', (e) => {
-    // Mouse movement refreshes an already-visible bar; it must not undo a tap-hide.
-    if (e.pointerType === 'mouse' && container.classList.contains('controls-visible')) showBar();
+    if (e.pointerType === 'mouse') showBar();
   });
+  bar.addEventListener('pointerdown', () => showBar());
+  bar.addEventListener('focusin', () => showBar());
 
   // --- touch zones: pointerdown/up, not click ---
   function bindThird(node, dir) {

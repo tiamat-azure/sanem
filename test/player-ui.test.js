@@ -706,6 +706,59 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.paused, false);
 });
 
+uiTest('mouse move reveals a hidden toolbar', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false);
+  assert.equal(ui.paused, false);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'mouse pointermove must reveal a hidden toolbar');
+  assert.equal(ui.paused, false, 'revealing the bar with the mouse must not pause playback');
+});
+
+uiTest('using the control bar refreshes the auto-hide timer', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await new Promise((r) => setTimeout(r, 1200));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'bar still visible before the 2s hide');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+      }));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 1500));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'pointerdown on the bar must reset the 2s auto-hide');
+  assert.equal(ui.paused, false);
+});
+
 uiTest('video surface double-tap does not toggle fullscreen', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed');
