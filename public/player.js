@@ -351,7 +351,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   const stopNativeSample = () => {
     if (nativeSampleRaf) {
-      cancelAnimationFrame(nativeSampleRaf);
+      window.cancelAnimationFrame(nativeSampleRaf);
       nativeSampleRaf = 0;
     }
   };
@@ -363,7 +363,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (!waitingNativeFs) return;
     noteNativeAssigned();
     if (adoptNativeSuccess()) return;
-    nativeSampleRaf = requestAnimationFrame(pumpNativeSample);
+    nativeSampleRaf = window.requestAnimationFrame(pumpNativeSample);
   };
 
   const syncForcedLandscape = () => {
