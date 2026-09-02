@@ -338,20 +338,6 @@ async function installFullscreenStub(send, behavior) {
       configurable: true,
       get() { return fsEl; },
     });
-    const impl = function() {
-      window.__fsRequests += 1;
-      ${
-        behavior === 'reject'
-          ? "return Promise.reject(new Error('fullscreen denied'));"
-          : behavior === 'noop'
-            ? 'return Promise.resolve();'
-            : `fsEl = this;
-               queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
-               return Promise.resolve();`
-      }
-    };
-    Element.prototype.requestFullscreen = impl;
-    Element.prototype.webkitRequestFullscreen = impl;
     const exit = function() {
       fsEl = null;
       document.dispatchEvent(new Event('fullscreenchange'));
@@ -359,6 +345,29 @@ async function installFullscreenStub(send, behavior) {
     };
     document.exitFullscreen = exit;
     document.webkitExitFullscreen = exit;
+    const behavior = ${JSON.stringify(behavior)};
+    if (behavior === 'webkit-delayed') {
+      Element.prototype.requestFullscreen = undefined;
+      Element.prototype.webkitRequestFullscreen = function() {
+        window.__fsRequests += 1;
+        const node = this;
+        setTimeout(() => {
+          fsEl = node;
+          document.dispatchEvent(new Event('webkitfullscreenchange'));
+        }, 200);
+      };
+      return;
+    }
+    const impl = function() {
+      window.__fsRequests += 1;
+      if (behavior === 'reject') return Promise.reject(new Error('fullscreen denied'));
+      if (behavior === 'noop') return Promise.resolve();
+      fsEl = this;
+      queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+      return Promise.resolve();
+    };
+    Element.prototype.requestFullscreen = impl;
+    Element.prototype.webkitRequestFullscreen = impl;
   })()`;
   await evaluate(send, script);
 }
@@ -563,6 +572,31 @@ uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
   assert.equal(ui.forcedLandscape, true, 'portrait fake-fullscreen rotates onto the long edge');
   const longEdge = Math.max(ui.player.w, ui.player.h);
   assert.ok(longEdge > 800, `expected landscape span, got ${longEdge}`);
+});
+
+uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'webkit-delayed');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  await new Promise((r) => setTimeout(r, 50));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false, 'must not overlay before delayed webkitFullscreenElement is assigned');
+  assert.equal(ui.forcedLandscape, false, 'must not rotate during the native wait');
+  assert.equal(ui.nativeFs, false, 'webkit assignment is still pending');
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      return (document.fullscreenElement || document.webkitFullscreenElement) === el;
+    })()`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1);
+  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fakeFs, false, 'late webkit fullscreen must not keep the CSS overlay');
+  assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
 });
 
 uiTest('narrow desktop window still tries native fullscreen', async (t) => {

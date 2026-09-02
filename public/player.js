@@ -278,7 +278,14 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   const isFull = () => container.classList.contains('is-fullscreen') || nativeFsEl() === container;
 
+  // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
+  // often land a tick later. Wait for that (or a short grace) before overlay.
+  const NATIVE_FS_GRACE_MS = 400;
+  let cancelNativeFsWait = () => {};
+  let waitingNativeFs = false;
+
   const exitFull = () => {
+    cancelNativeFsWait();
     container.classList.remove('is-fullscreen', 'is-fake-fullscreen', 'is-forced-landscape');
     document.documentElement.classList.remove('player-fs');
     btnFull.setAttribute('aria-label', 'Plein écran');
@@ -290,6 +297,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
   };
   const enterFull = () => {
+    cancelNativeFsWait();
     container.classList.add('is-fullscreen');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     document.documentElement.classList.add('player-fs');
@@ -302,10 +310,42 @@ export function mountPlayer(root, { file, next, onNext }) {
       container.classList.add('is-fake-fullscreen');
       return tryLockLandscape();
     };
+    let settled = false;
+    let timer = 0;
+    const onLanded = () => {
+      if (nativeFsEl() === container) finish(false);
+    };
+    const finish = (wantFake) => {
+      if (settled) return;
+      settled = true;
+      waitingNativeFs = false;
+      cancelNativeFsWait = () => {};
+      document.removeEventListener('fullscreenchange', onLanded);
+      document.removeEventListener('webkitfullscreenchange', onLanded);
+      clearTimeout(timer);
+      const go = nativeFsEl() === container || !wantFake ? tryLockLandscape() : useFake();
+      Promise.resolve(go).finally(syncForcedLandscape);
+    };
+    waitingNativeFs = true;
+    document.addEventListener('fullscreenchange', onLanded);
+    document.addEventListener('webkitfullscreenchange', onLanded);
+    timer = setTimeout(() => finish(true), NATIVE_FS_GRACE_MS);
+    cancelNativeFsWait = () => {
+      if (settled) return;
+      settled = true;
+      waitingNativeFs = false;
+      document.removeEventListener('fullscreenchange', onLanded);
+      document.removeEventListener('webkitfullscreenchange', onLanded);
+      clearTimeout(timer);
+      cancelNativeFsWait = () => {};
+    };
+    // Listeners are attached before the request so a sync webkitfullscreenchange
+    // is not missed. Do not treat a resolved-but-empty Promise as a no-op yet.
     requestNativeFs(container)
-      .then(() => (nativeFsEl() === container ? tryLockLandscape() : useFake()))
-      .catch(useFake)
-      .finally(syncForcedLandscape);
+      .then(() => {
+        if (nativeFsEl() === container) finish(false);
+      })
+      .catch(() => finish(true));
   };
   const toggleFull = () => {
     if (isFull()) exitFull();
@@ -317,7 +357,13 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   const onFsChange = () => {
     const native = nativeFsEl() === container;
-    if (!native && container.classList.contains('is-fullscreen') && !container.classList.contains('is-fake-fullscreen')) {
+    if (native) {
+      syncForcedLandscape();
+      return;
+    }
+    // Prefixed FS may fire an empty change before assigning the element.
+    if (waitingNativeFs) return;
+    if (container.classList.contains('is-fullscreen') && !container.classList.contains('is-fake-fullscreen')) {
       // Esc / system UI left native fullscreen: drop the CSS class too.
       exitFull();
       return;
