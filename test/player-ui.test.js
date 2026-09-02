@@ -357,11 +357,23 @@ async function installFullscreenStub(send, behavior) {
       configurable: true,
       get() { return fsEl; },
     });
+    let exitDelayMs = 0;
     const exit = function() {
       window.__fsExits += 1;
-      fsEl = null;
-      document.dispatchEvent(new Event('fullscreenchange'));
-      return Promise.resolve();
+      const finish = () => {
+        fsEl = null;
+        document.dispatchEvent(new Event('fullscreenchange'));
+      };
+      if (exitDelayMs <= 0) {
+        finish();
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          finish();
+          resolve();
+        }, exitDelayMs);
+      });
     };
     document.exitFullscreen = exit;
     document.webkitExitFullscreen = exit;
@@ -388,6 +400,15 @@ async function installFullscreenStub(send, behavior) {
     }
     if (behavior === 'webkit-late-silent') {
       installPrefixed(700, true, false);
+      return;
+    }
+    if (behavior === 'webkit-late-async-exit') {
+      exitDelayMs = 300;
+      installPrefixed(700, true, true);
+      return;
+    }
+    if (behavior === 'webkit-after-watch-silent') {
+      installPrefixed(1500, true, false);
       return;
     }
     if (behavior === 'succeed-then-leave') {
@@ -1119,6 +1140,58 @@ uiTest('late native fullscreen does not override overlay fallback', async (t) =>
   assert.ok(ui.fsExits >= 1, 'late native under overlay must call exitFullscreen');
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
   assert.equal(ui.forcedLandscape, true, 'phone overlay in portrait keeps forced landscape');
+});
+
+uiTest('async exit under overlay keeps rotate and does not re-exit', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'webkit-late-async-exit');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
+  );
+  await waitFor(send, '(window.__fsExits ?? 0) >= 1');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true, 'overlay stays while async exitFullscreen is in flight');
+  assert.equal(ui.forcedLandscape, true, 'must not drop rotate/chrome while native is still assigned');
+  assert.equal(ui.htmlFs, true);
+  assert.equal(ui.fsExits, 1, 'must not re-call exitFullscreen every watch tick');
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      return (document.fullscreenElement || document.webkitFullscreenElement) !== el;
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.forcedLandscape, true);
+  assert.equal(ui.fsExits, 1, 'watch must not hammer exitFullscreen after the first dismiss');
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+uiTest('silent native assign after the 900ms watch cap is still cancelled', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'webkit-after-watch-silent');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
+  );
+  await new Promise((r) => setTimeout(r, 600));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.nativeFs, false, '900ms wait-watch cap must not leave native sitting under overlay yet');
+  assert.equal(ui.fsExits, 0, 'no native assign yet, so no exit');
+  await waitFor(send, '(window.__fsExits ?? 0) >= 1');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true, 'stay overlay after a silent assign past the 900ms cap');
+  assert.equal(ui.forcedLandscape, true);
+  assert.equal(ui.nativeFs, false, 'overlay watch must still dismiss silent native after 900ms');
+  assert.ok(ui.fsExits >= 1);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
 });
 
 uiTest('silent late webkit assign does not snap overlay to native', async (t) => {

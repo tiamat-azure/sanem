@@ -357,6 +357,9 @@ export function mountPlayer(root, { file, next, onNext }) {
   let nativeGraceTimer = 0;
   let nativeWatchTimer = 0;
   let nativeSampleRaf = 0;
+  // True while exitFullscreen is in flight under overlay. Real exit is async,
+  // so the watch must not re-call it, and overlay rotate must stay put.
+  let exitingNativeUnderOverlay = false;
 
   const stopNativeGrace = () => {
     waitingNativeFs = false;
@@ -396,8 +399,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     // Overlay already applied: keep it even if native assigns later.
     if (native && wantFull && !overlay) container.classList.remove('is-fake-fullscreen');
     const fake = wantFull && overlay;
-    // Never CSS-rotate a live native fullscreen element (chrome flash).
-    const rotate = fake && !native && isPortrait() && isPhone();
+    // Overlay-only rotate stays on while a dismissed native is still
+    // exiting (exitFullscreen is async). Dropping is-forced-landscape for
+    // native && overlay flashes rotate/chrome, then restores it.
+    const rotate = fake && isPortrait() && isPhone();
     if (!rotate) container.classList.remove('is-forced-landscape');
     container.classList.toggle('is-forced-landscape', rotate);
     document.documentElement.classList.toggle(
@@ -409,10 +414,29 @@ export function mountPlayer(root, { file, next, onNext }) {
   const dismissNativeUnderOverlay = () => {
     if (!wantFull || !container.classList.contains('is-fake-fullscreen')) return false;
     if (nativeFsEl() !== container) return false;
-    // Overlay already on: cancel native so CSS-rotate is not applied on top
-    // of a live Fullscreen element (chrome flash / broken rotate).
-    exitNativeFs().catch(() => {});
+    if (exitingNativeUnderOverlay) return true;
+    exitingNativeUnderOverlay = true;
+    // Call exit once. The wait-watch is already stopped when overlay
+    // applies; the overlay dismiss watch must not re-enter exitFullscreen
+    // while the async exit is in flight.
+    exitNativeFs()
+      .catch(() => {})
+      .finally(() => {
+        exitingNativeUnderOverlay = false;
+      });
     return true;
+  };
+
+  const startOverlayDismissWatch = () => {
+    stopNativeWatch();
+    nativeWatchTimer = setInterval(() => {
+      if (!wantFull || !container.classList.contains('is-fake-fullscreen')) {
+        stopNativeWatch();
+        return;
+      }
+      noteNativeAssigned();
+      dismissNativeUnderOverlay();
+    }, 50);
   };
 
   // Native wins during the wait. Once overlay fallback has been applied,
@@ -451,6 +475,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     document.documentElement.classList.add('player-fs');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     tryLockLandscape();
+    // Wait-watch would keep calling adoptNativeSuccess (which returns false
+    // on dismiss) and re-exit until 900ms. Overlay watch dismisses silent
+    // late native for as long as overlay is on, without adopting.
+    startOverlayDismissWatch();
     syncForcedLandscape();
   };
 
@@ -459,8 +487,8 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
   // often land a tick later. Wait for that (or a short grace) before overlay.
-  // Watch keeps running after overlay so a silent late native assign can be
-  // cancelled; overlay must not snap to native.
+  // The 900ms wait-watch stops when overlay applies; overlay then has its
+  // own dismiss sampler for silent late native (no adopt, no 900ms cap).
   const NATIVE_FS_GRACE_MS = 400;
   const NATIVE_FS_WATCH_MS = 900;
 
@@ -468,6 +496,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     wantFull = false;
     sawNativeFs = false;
     nativeElOnRequest = false;
+    exitingNativeUnderOverlay = false;
     stopNativeGrace();
     stopNativeWatch();
     container.classList.remove('is-fullscreen', 'is-fake-fullscreen', 'is-forced-landscape');
