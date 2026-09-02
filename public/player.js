@@ -595,8 +595,8 @@ export function mountPlayer(root, { file, next, onNext }) {
     waitingNativeFs = true;
     if (leftoverNative) {
       // Do not request while leftover native is still assigned (often a no-op).
-      // Re-issue exit and bound the wait so a hung prior exit cannot stall.
-      exitNativeFs().catch(() => {});
+      // Bound the wait so a hung prior exit cannot stall toggleFull; the
+      // original exitFullscreen is already in flight.
       leftoverWaitTimer = setTimeout(() => {
         leftoverWaitTimer = 0;
         if (gen !== fsGen || !leftoverNative) return;
@@ -677,11 +677,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   bar.addEventListener('pointerdown', (e) => {
     barActivePointers.add(e.pointerId);
-    try {
-      bar.setPointerCapture(e.pointerId);
-    } catch {
-      // Capture needs a trusted pointer; document listeners still clear the id.
-    }
     showBar();
   });
   bar.addEventListener('pointermove', (e) => {
