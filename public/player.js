@@ -576,16 +576,9 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (heldMs >= 500) return;
 
       if (dir === 'center') {
-        // single tap: pause+show while playing, play while paused
-        // (the center button is the named control; this is the surface)
-        // double tap toggles fullscreen
-        tapCount += 1;
-        clearTimeout(tapTimer);
-        tapTimer = setTimeout(() => {
-          if (tapCount >= 2) toggleFull();
-          else togglePlay();
-          tapCount = 0;
-        }, 280);
+        // Immediate play/pause. Double-tap fullscreen lives on the dedicated
+        // fullscreen button, not on the video surface.
+        togglePlay();
         return;
       }
 

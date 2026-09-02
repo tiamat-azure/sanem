@@ -681,9 +681,8 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.paused, false);
 
   await tapVideoCenter(send);
-  await waitFor(send, 'document.querySelector("video")?.paused === true');
   ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.paused, true, 'tap on playing video with hidden toolbar pauses');
+  assert.equal(ui.paused, true, 'surface tap pauses immediately, without a double-tap delay');
   assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
   assert.equal(ui.centerPlay, true, 'paused state shows the center play icon');
   assert.equal(ui.centerPlayTag, 'BUTTON', 'center play must be a real button');
@@ -693,9 +692,8 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.toolbarPlay, false);
 
   await tapVideoCenter(send);
-  await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
   ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.paused, false, 'tap on paused video resumes playback');
+  assert.equal(ui.paused, false, 'surface tap on paused video resumes immediately');
   assert.equal(ui.centerPlay, false, 'center play icon hides once playing');
   assert.equal(ui.controlsVisible, true, 'toolbar is shown on resume');
   await waitFor(
@@ -706,6 +704,20 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'toolbar fades 2s after resume');
   assert.equal(ui.paused, false);
+});
+
+uiTest('video surface double-tap does not toggle fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await loopAndPlay(send);
+  await tapVideoCenter(send);
+  await tapVideoCenter(send);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fsRequests, 0, 'double-tap on the video surface must not request fullscreen');
+  assert.equal(ui.fs, false);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.htmlFs, false);
 });
 
 uiTest('center play button is named and usable by click and keyboard', async (t) => {
@@ -1018,7 +1030,6 @@ uiTest('center tap does not play while the series-end overlay is showing', async
   assert.equal(ui.centerPlay, false, 'center play icon stays hidden behind the end overlay');
 
   await tapVideoCenter(send);
-  await new Promise((r) => setTimeout(r, 350));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, true, 'center tap must not call play while is-end is showing');
   assert.equal(ui.endOverlay, true, 'end overlay must stay up; tap is not replay');
