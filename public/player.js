@@ -182,7 +182,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   // Mouse/pen hover or an active pointer on the bar holds controls-visible
   // so the 2s timer cannot hide it under the cursor/finger.
   const barHoldsVisible = () =>
-    pointerInBar || hoverHoldBar() || barActivePointers.size > 0;
+    pointerInBar ||
+    hoverHoldBar() ||
+    barActivePointers.size > 0 ||
+    (document.activeElement != null && bar.contains(document.activeElement));
   const hideBar = () => {
     if (barHoldsVisible()) {
       clearTimeout(hideTimer);
@@ -600,6 +603,12 @@ export function mountPlayer(root, { file, next, onNext }) {
       leftoverWaitTimer = setTimeout(() => {
         leftoverWaitTimer = 0;
         if (gen !== fsGen || !leftoverNative) return;
+        // rAF may have been paused (background tab) while leftover already
+        // left with no fullscreenchange — resume native, do not overlay.
+        if (nativeFsEl() !== container) {
+          resumeNativeAfterLeftover();
+          return;
+        }
         applyOverlayFallback();
         leftoverNative = false;
       }, LEFTOVER_NATIVE_WAIT_MS);
@@ -609,6 +618,12 @@ export function mountPlayer(root, { file, next, onNext }) {
     armNativeWait();
   };
   const toggleFull = () => {
+    // Leftover native is still on screen: a second ⛶/F must exit, not wait
+    // for the 400ms leftover bound to overlay.
+    if (waitingNativeFs && leftoverNative) {
+      exitFull();
+      return;
+    }
     // Wait-only wantFull is not "already full": a second tap/F during the
     // native grace (common on iOS no-op) must not abort overlay fallback.
     if (waitingNativeFs) return;
@@ -700,6 +715,9 @@ export function mountPlayer(root, { file, next, onNext }) {
     showBar();
   });
   bar.addEventListener('focusin', () => showBar());
+  bar.addEventListener('focusout', () => {
+    queueMicrotask(() => showBar());
+  });
   bar.addEventListener('keydown', () => showBar());
 
   // --- touch zones: pointerdown/up, not click ---

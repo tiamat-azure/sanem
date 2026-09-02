@@ -440,6 +440,26 @@ async function installFullscreenStub(send, behavior) {
       Element.prototype.webkitRequestFullscreen = impl;
       return;
     }
+    if (behavior === 'exit-silent-clear') {
+      const impl = function() {
+        window.__fsRequests += 1;
+        fsEl = this;
+        queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+        return Promise.resolve();
+      };
+      const silentExit = function() {
+        window.__fsExits += 1;
+        setTimeout(() => {
+          fsEl = null;
+        }, 80);
+        return Promise.resolve();
+      };
+      document.exitFullscreen = silentExit;
+      document.webkitExitFullscreen = silentExit;
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     if (behavior === 'succeed-then-leave') {
       const impl = function() {
         window.__fsRequests += 1;
@@ -1099,6 +1119,27 @@ uiTest('keydown on a focused bar control refreshes auto-hide', async (t) => {
   assert.equal(ui.paused, false);
 });
 
+uiTest('keyboard focus on the control bar holds it visible', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(send, 'document.querySelector(".speed").focus()');
+  const focused = await evaluate(send, 'document.activeElement?.classList.contains("speed") === true');
+  assert.equal(focused, true);
+  await new Promise((r) => setTimeout(r, 2500));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'focused speed select must not time-hide the bar');
+  assert.equal(ui.paused, false);
+  await evaluate(send, 'document.querySelector(".speed").blur()');
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'blurring the bar control must restart auto-hide');
+});
+
 uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed');
@@ -1117,6 +1158,16 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
     'document.activeElement?.getAttribute("aria-label") === "Plein écran"'
   );
   assert.equal(focused, true);
+  await new Promise((r) => setTimeout(r, 2500));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'focus on a bar control must hold the bar visible');
+  await evaluate(
+    send,
+    `(function(){
+      const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
+      if (btn) btn.blur();
+    })()`
+  );
   await waitFor(
     send,
     'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
@@ -1174,6 +1225,58 @@ uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) =>
   assert.equal(ui.fs, true);
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
   assert.equal(ui.fsRequests, 2, 'leftover leave must issue exactly one new native request');
+});
+
+uiTest('second fullscreen toggle during leftover wait exits native', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed-slow-exit');
+  await clickFullscreen(send);
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'leftover native is still on screen during leftover wait');
+  assert.equal(ui.fs, false, 'leftover wait has not adopted native yet');
+  assert.equal(ui.fsRequests, 1, 'leftover enter must not re-request while native is still assigned');
+  assert.equal(ui.fsLabel, 'Plein écran');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'second toggle during leftover wait must exit');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
+  await new Promise((r) => setTimeout(r, 400));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'leftover bound must not overlay after the user exited');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, false);
+});
+
+uiTest('leftover timer resumes native if leftover already left', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'exit-silent-clear');
+  await clickFullscreen(send);
+  // Pause leftover rAF so a silent leftover leave is only seen by the 400ms
+  // bound — background tabs pause rAF the same way.
+  await evaluate(send, 'window.requestAnimationFrame = function() { return 0; }');
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      const native = (document.fullscreenElement || document.webkitFullscreenElement) === el;
+      return native
+        && el.classList.contains('is-fullscreen')
+        && !el.classList.contains('is-fake-fullscreen')
+        && (window.__fsRequests ?? 0) >= 2;
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'leftover timer must resume native after a silent leftover leave');
+  assert.equal(ui.fakeFs, false, 'cleared leftover must not apply overlay');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsRequests, 2);
 });
 
 uiTest('hung leftover native exit falls back to overlay instead of stalling', async (t) => {
