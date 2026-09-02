@@ -13,7 +13,9 @@ import { authRouter, requireSession } from './auth.js';
 import { filesRouter } from './files.js';
 import { tusServer, scheduleTusExpirationCleanup } from './tus.js';
 import { scheduleTmpCleanup } from './cleanup.js';
-import { warmMediaCache } from './transcode.js';
+import { warmMediaCache, hlsRouter } from './transcode.js';
+import { mediaRouter } from './media.js';
+import { thumbsRouter } from './thumbs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
@@ -44,6 +46,12 @@ app.all(['/files', '/files/*splat'], requireSession, (req, res) => {
 app.use('/api', express.json());
 app.use('/api', authRouter);
 app.use('/api', filesRouter);
+
+// Media routes: behind the session middleware (applied per-route) and after
+// the tus route, so they never interfere with it (PRD §8).
+app.use('/api', mediaRouter);
+app.use('/api', hlsRouter);
+app.use('/api', thumbsRouter);
 
 app.use(express.static(publicDir, { index: false }));
 

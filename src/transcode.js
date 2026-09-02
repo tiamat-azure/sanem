@@ -14,6 +14,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { Router } from 'express';
+import { requireSession } from './auth.js';
 import { config } from './config.js';
 import { resolveReadPath } from './filename.js';
 
@@ -241,5 +243,21 @@ export async function analyzeMedia(relPath) {
     inFlight.delete(relPath);
   }
 }
+
+// --- on-demand segmented HLS (§10.3) - implemented in step 6 ---
+
+export const hlsRouter = Router();
+
+hlsRouter.get('/hls/*splat', requireSession, async (req, res) => {
+  const raw = req.params.splat;
+  const rel = Array.isArray(raw) ? raw.join('/') : String(raw ?? '');
+  try {
+    await resolveReadPath(uploadsDir, rel.replace(/\/[^/]*\.(m3u8|ts)$/, ''));
+  } catch {
+    return res.status(404).end();
+  }
+  // Playlist/segment generation is added in step 6.
+  return res.status(404).end();
+});
 
 export { transcodeDir, uploadsDir };
