@@ -107,8 +107,8 @@ One line each; full rationale in PRD §13.
 - The HLS segment plan (keyframe scan, up to ~20 s for a 1.5 GB file) is pre-built by
   `analyzeMedia` post-upload, non-blocking - never on the first playlist request.
 - Fullscreen goes on the player container, never `<video>`, or the custom bar vanishes.
-  On phones, prefer the CSS fallback (fill + optional 90° rotate in portrait) because
-  the native API often no-ops or stays portrait.
+  Always try the native Fullscreen API first (including phones). CSS overlay + optional
+  90° rotate only if native rejects or is a no-op; never rotate native fullscreen.
 - Global `[hidden] { display: none !important }` is required: component rules set
   `display: flex/grid` and would otherwise beat the bare `hidden` attribute.
 - At most `SANEM_FFMPEG_CONCURRENCY` (default 1) ffmpeg processes: uploads come first.

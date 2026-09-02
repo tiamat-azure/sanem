@@ -31,6 +31,12 @@ function chromePath() {
   return CHROME_CANDIDATES.find((p) => existsSync(p));
 }
 
+const HAS_CHROME = Boolean(chromePath());
+
+function uiTest(name, fn) {
+  test(name, { skip: HAS_CHROME ? false : 'Chromium not installed; skipping player UI E2E' }, fn);
+}
+
 async function getFreePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -169,7 +175,7 @@ class Cdp {
   }
 }
 
-async function openChrome(t) {
+async function openChrome(t, { touch = true } = {}) {
   const bin = chromePath();
   assert.ok(bin, 'Google Chrome / Chromium is required for player UI E2E');
   const dbgPort = await getFreePort();
@@ -215,8 +221,19 @@ async function openChrome(t) {
   await send('Page.enable');
   await send('Runtime.enable');
   await send('Network.enable');
-  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  if (touch) {
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  }
   return { send };
+}
+
+async function setDesktopViewport(send, { width, height }) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
 }
 
 async function setPhoneViewport(send, { width, height, landscape }) {
@@ -309,11 +326,65 @@ async function tapSelector(send, selector) {
   );
 }
 
-async function openPlayer(t, viewport) {
+async function installFullscreenStub(send, behavior) {
+  const script = `(function(){
+    window.__fsRequests = 0;
+    let fsEl = null;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get() { return fsEl; },
+    });
+    Object.defineProperty(document, 'webkitFullscreenElement', {
+      configurable: true,
+      get() { return fsEl; },
+    });
+    const impl = function() {
+      window.__fsRequests += 1;
+      ${
+        behavior === 'reject'
+          ? "return Promise.reject(new Error('fullscreen denied'));"
+          : behavior === 'noop'
+            ? 'return Promise.resolve();'
+            : `fsEl = this;
+               queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+               return Promise.resolve();`
+      }
+    };
+    Element.prototype.requestFullscreen = impl;
+    Element.prototype.webkitRequestFullscreen = impl;
+    const exit = function() {
+      fsEl = null;
+      document.dispatchEvent(new Event('fullscreenchange'));
+      return Promise.resolve();
+    };
+    document.exitFullscreen = exit;
+    document.webkitExitFullscreen = exit;
+  })()`;
+  await evaluate(send, script);
+}
+
+async function clickFullscreen(send) {
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  // is-fullscreen is set synchronously; wait until native was attempted and
+  // either the overlay fallback or the native element is in place.
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      if (!el?.classList.contains('is-fullscreen')) return false;
+      if ((window.__fsRequests ?? 0) < 1) return false;
+      return el.classList.contains('is-fake-fullscreen')
+        || (document.fullscreenElement || document.webkitFullscreenElement) === el;
+    })()`
+  );
+}
+
+async function openPlayer(t, viewport, { phone = true } = {}) {
   const { baseUrl } = await startServer(t);
   const cookie = await loginCookie(baseUrl);
-  const { send } = await openChrome(t);
-  await setPhoneViewport(send, viewport);
+  const { send } = await openChrome(t, { touch: phone });
+  if (phone) await setPhoneViewport(send, viewport);
+  else await setDesktopViewport(send, viewport);
   await send('Network.setCookie', {
     name: cookie.name,
     value: cookie.value,
@@ -338,6 +409,11 @@ const SNAPSHOT = `({
   fs: document.querySelector('.player-container')?.classList.contains('is-fullscreen') ?? false,
   fakeFs: document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') ?? false,
   forcedLandscape: document.querySelector('.player-container')?.classList.contains('is-forced-landscape') ?? false,
+  nativeFs: (() => {
+    const el = document.querySelector('.player-container');
+    return (document.fullscreenElement || document.webkitFullscreenElement) === el;
+  })(),
+  fsRequests: window.__fsRequests ?? 0,
   player: (() => {
     const el = document.querySelector('.player-container');
     if (!el) return null;
@@ -371,7 +447,7 @@ const SNAPSHOT = `({
   viewport: { w: window.innerWidth, h: window.innerHeight, portrait: window.matchMedia('(orientation: portrait)').matches },
 })`;
 
-test('player UI on a smartphone portrait viewport', async (t) => {
+uiTest('player UI on a smartphone portrait viewport', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
 
   let ui = await evaluate(send, SNAPSHOT);
@@ -419,9 +495,11 @@ test('player UI on a smartphone portrait viewport', async (t) => {
   assert.equal(ui.controlsVisible, true, 'second tap shows the overlay again');
   assert.ok(ui.bar.wrap < 8, `toolbar wrapped after toggle by ${ui.bar.wrap}px`);
 
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
-  await new Promise((r) => setTimeout(r, 400));
+  await installFullscreenStub(send, 'reject');
+  await clickFullscreen(send);
   ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
+  assert.equal(ui.nativeFs, false, 'rejected native request must not report a fullscreen element');
   assert.equal(ui.fs, true, `expected fullscreen class, got ${JSON.stringify(ui)}`);
   assert.equal(ui.fakeFs, true);
   assert.equal(ui.forcedLandscape, true);
@@ -432,7 +510,7 @@ test('player UI on a smartphone portrait viewport', async (t) => {
   assert.ok(longEdge > 800, `expected landscape span, got ${longEdge}`);
 });
 
-test('player UI on a smartphone landscape viewport', async (t) => {
+uiTest('player UI on a smartphone landscape viewport', async (t) => {
   const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
 
   let ui = await evaluate(send, SNAPSHOT);
@@ -449,13 +527,65 @@ test('player UI on a smartphone landscape viewport', async (t) => {
     await clickSelector(send, '.touch-center');
     await new Promise((r) => setTimeout(r, 350));
   }
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
-  await new Promise((r) => setTimeout(r, 400));
+  await installFullscreenStub(send, 'reject');
+  await clickFullscreen(send);
   ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
+  assert.equal(ui.nativeFs, false);
   assert.equal(ui.fs, true, `expected fullscreen class, got ${JSON.stringify(ui)}`);
   assert.equal(ui.fakeFs, true);
   assert.equal(ui.forcedLandscape, false, 'already landscape: do not rotate again');
   assert.ok(Math.abs(ui.player.w - ui.viewport.w) < 8, `fs width ${ui.player.w} vs ${ui.viewport.w}`);
   assert.ok(Math.abs(ui.player.h - ui.viewport.h) < 8, `fs height ${ui.player.h} vs ${ui.viewport.h}`);
   assert.ok(ui.player.w > ui.player.h, 'landscape fullscreen is wider than it is tall');
+});
+
+uiTest('native fullscreen is used on a portrait phone when the API works', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
+  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false, 'successful native fullscreen must not use the CSS overlay');
+  assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
+});
+
+uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fakeFs, true, 'no-op native request must fall back to the CSS overlay');
+  assert.equal(ui.forcedLandscape, true, 'portrait fake-fullscreen rotates onto the long edge');
+  const longEdge = Math.max(ui.player.w, ui.player.h);
+  assert.ok(longEdge > 800, `expected landscape span, got ${longEdge}`);
+});
+
+uiTest('narrow desktop window still tries native fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  const before = await evaluate(
+    send,
+    `({
+      w: window.innerWidth,
+      h: window.innerHeight,
+      coarse: window.matchMedia('(pointer: coarse)').matches,
+      portrait: window.matchMedia('(orientation: portrait)').matches,
+    })`
+  );
+  assert.equal(before.w, 500);
+  assert.equal(before.h, 800);
+  assert.equal(before.coarse, false, 'desktop viewport must not be treated as a coarse-pointer phone');
+  assert.equal(before.portrait, true);
+
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
+  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fakeFs, false, 'a merely narrow desktop window must not skip native fullscreen');
+  assert.equal(ui.forcedLandscape, false, 'native fullscreen must not CSS-rotate in portrait');
 });

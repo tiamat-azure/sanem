@@ -1,9 +1,11 @@
 // Custom video player (PRD §11.3): native <video>, home-made control bar,
 // mobile-style touch zones, keyboard shortcuts, next-episode chaining and
 // per-browser resume positions (localStorage). Fullscreen goes on the
-// container, never on <video>, or the custom bar disappears (§13). On
-// phones the control uses a CSS fallback so the video fills the long edge
-// (landscape) even when the Fullscreen API or orientation.lock is missing.
+// container, never on <video>, or the custom bar disappears (§13). Always
+// try the native Fullscreen API first (Android Chrome can then hide the
+// browser chrome). CSS overlay + optional landscape rotate is only a
+// fallback when native rejects or is a no-op — never a first choice on
+// phones, and never applied on top of a successful native fullscreen.
 
 const POS_PREFIX = 'sanem-pos:';
 const WATCHED_PREFIX = 'sanem-watched:';
@@ -240,10 +242,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
 
   // --- fullscreen (on the container, never <video>) ---
-  // Native Fullscreen API is missing or incomplete on many phones (iOS
-  // Safari in particular). Always apply a CSS fallback class, try the API
-  // and orientation.lock, and if the viewport stays portrait, rotate the
-  // player so the video is watched along the phone's long edge.
+  // Native first, including on phones. Overlay + CSS rotate only if the
+  // API rejects, is missing, or resolves without actually fullscreening
+  // the container (common no-op on iOS). Forced landscape is fake-fs +
+  // portrait only — never rotate a successful native fullscreen.
   const nativeFsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
   const requestNativeFs = (node) => {
     const fn = node.requestFullscreen || node.webkitRequestFullscreen;
@@ -264,14 +266,15 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
   };
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
-  const preferFakeFs = () =>
-    window.matchMedia('(pointer: coarse), (hover: none)').matches ||
-    window.innerWidth < 640 ||
-    window.innerHeight < 640;
   const syncForcedLandscape = () => {
-    const on = container.classList.contains('is-fullscreen') && isPortrait();
-    container.classList.toggle('is-forced-landscape', on);
-    document.documentElement.classList.toggle('player-fs', container.classList.contains('is-fullscreen'));
+    const native = nativeFsEl() === container;
+    if (native) container.classList.remove('is-fake-fullscreen');
+    const fake = container.classList.contains('is-fake-fullscreen');
+    container.classList.toggle('is-forced-landscape', fake && isPortrait());
+    document.documentElement.classList.toggle(
+      'player-fs',
+      container.classList.contains('is-fullscreen') || native
+    );
   };
   const isFull = () => container.classList.contains('is-fullscreen') || nativeFsEl() === container;
 
@@ -290,16 +293,19 @@ export function mountPlayer(root, { file, next, onNext }) {
     container.classList.add('is-fullscreen');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     document.documentElement.classList.add('player-fs');
-    const afterNative = () => {
+    const tryLockLandscape = () => {
       const lock = screen.orientation?.lock?.('landscape');
       return lock ? Promise.resolve(lock).catch(() => {}) : Promise.resolve();
     };
     const useFake = () => {
+      if (nativeFsEl() === container) return tryLockLandscape();
       container.classList.add('is-fake-fullscreen');
-      return afterNative();
+      return tryLockLandscape();
     };
-    const native = preferFakeFs() ? Promise.reject(new Error('phone fake-fs')) : requestNativeFs(container);
-    native.then(afterNative).catch(useFake).finally(syncForcedLandscape);
+    requestNativeFs(container)
+      .then(() => (nativeFsEl() === container ? tryLockLandscape() : useFake()))
+      .catch(useFake)
+      .finally(syncForcedLandscape);
   };
   const toggleFull = () => {
     if (isFull()) exitFull();
