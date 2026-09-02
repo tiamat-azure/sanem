@@ -172,7 +172,21 @@ export function mountPlayer(root, { file, next, onNext }) {
   }
 
   let hideTimer = null;
+  let pointerInBar = false;
+  const hoverHoldBar = () =>
+    window.matchMedia('(hover: hover)').matches &&
+    window.matchMedia('(pointer: fine)').matches &&
+    bar.matches(':hover');
+  // Mouse/pen inside the bar holds controls-visible so the 2s timer cannot
+  // slide the bar out from under the cursor (click would then miss the
+  // control and pause the surface). Touch still uses the 2s timer.
+  const barHoldsVisible = () => pointerInBar || hoverHoldBar();
   const hideBar = () => {
+    if (barHoldsVisible()) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+      return;
+    }
     container.classList.remove('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
@@ -187,7 +201,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     container.classList.add('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
-    if (!video.paused) {
+    if (!video.paused && !barHoldsVisible()) {
       hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
     }
   };
@@ -569,6 +583,16 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   bar.addEventListener('pointerup', onBarPointerEnd);
   bar.addEventListener('pointercancel', onBarPointerEnd);
+  bar.addEventListener('pointerenter', (e) => {
+    if (e.pointerType === 'touch') return;
+    pointerInBar = true;
+    showBar();
+  });
+  bar.addEventListener('pointerleave', (e) => {
+    if (e.pointerType === 'touch') return;
+    pointerInBar = false;
+    showBar();
+  });
   bar.addEventListener('focusin', () => showBar());
   bar.addEventListener('keydown', () => showBar());
 

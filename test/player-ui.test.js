@@ -315,6 +315,24 @@ async function clickSelector(send, selector) {
   });
 }
 
+async function clickAt(send, x, y) {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  await send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x,
+    y,
+    button: 'left',
+    clickCount: 1,
+  });
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x,
+    y,
+    button: 'left',
+    clickCount: 1,
+  });
+}
+
 async function tapSelector(send, selector) {
   await evaluate(
     send,
@@ -732,6 +750,88 @@ uiTest('mouse move reveals a hidden toolbar', async (t) => {
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true, 'mouse pointermove must reveal a hidden toolbar');
   assert.equal(ui.paused, false, 'revealing the bar with the mouse must not pause playback');
+});
+
+uiTest('hovering the control bar holds it visible and clicks hit controls', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  const box = await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return null;
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerenter', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
+  await new Promise((r) => setTimeout(r, 2500));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'bar must not time-hide under the cursor');
+  assert.equal(ui.paused, false);
+  const mutedBefore = await evaluate(send, 'Boolean(document.querySelector("video")?.muted)');
+  assert.equal(mutedBefore, false);
+  await clickAt(send, box.x, box.y);
+  ui = await evaluate(send, SNAPSHOT);
+  const mutedAfter = await evaluate(send, 'Boolean(document.querySelector("video")?.muted)');
+  assert.equal(ui.paused, false, 'click on a bar control must not click-through to pause the surface');
+  assert.equal(mutedAfter, true, 'click at the control coordinates must hit mute, not the video');
+  assert.equal(ui.controlsVisible, true);
+});
+
+uiTest('leaving the control bar resumes auto-hide', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerenter', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 2500));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'hover must keep the bar up past the 2s timer');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerleave', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'pointerleave must restart the 2s auto-hide');
+  assert.equal(ui.paused, false);
 });
 
 uiTest('using the control bar refreshes the auto-hide timer', async (t) => {
