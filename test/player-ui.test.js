@@ -1187,7 +1187,7 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
     send,
     'document.activeElement && document.querySelector(".control-bar")?.contains(document.activeElement)'
   );
-  assert.equal(focused, false, 'hide must blur the off-screen bar control');
+  assert.equal(focused, false, 'inert hidden bar must not keep focus');
   const inert = await evaluate(send, 'Boolean(document.querySelector(".control-bar")?.inert)');
   assert.equal(inert, true, 'hidden bar must be inert so it leaves the tab order');
   const canFocusHidden = await evaluate(
@@ -1247,8 +1247,8 @@ uiTest('second fullscreen toggle during leftover wait exits native', async (t) =
   assert.equal(ui.nativeFs, true, 'leftover native is still on screen during leftover wait');
   assert.equal(ui.fs, false, 'leftover wait has not adopted native yet');
   assert.equal(ui.fsRequests, 1, 'leftover enter must not re-request while native is still assigned');
-  assert.equal(ui.fsLabel, 'Plein écran');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  assert.equal(ui.fsLabel, 'Quitter le plein écran', 'leftover wait must offer exit, not a second enter');
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false, 'second toggle during leftover wait must exit');
   assert.equal(ui.fakeFs, false);
@@ -1297,6 +1297,9 @@ uiTest('hung leftover native exit falls back to overlay instead of stalling', as
   assert.equal(ui.nativeFs, true);
   await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
   await tapSelector(send, 'button[aria-label="Plein écran"]');
+  // Poll-only dismiss would wait 50ms; freeze setInterval so only the
+  // immediate overlay-apply tick can call exitFullscreen.
+  await evaluate(send, 'window.setInterval = function() { return 0; }');
   await waitFor(
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
@@ -1305,6 +1308,10 @@ uiTest('hung leftover native exit falls back to overlay instead of stalling', as
   assert.equal(ui.fakeFs, true, 'hung leftover native must not stall waitingNativeFs forever');
   assert.equal(ui.fs, true);
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.ok(
+    ui.fsExits >= 2,
+    'overlay must dismiss leftover native immediately, not on the first 50ms poll'
+  );
   await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false, 'after leftover overlay, toggle must be able to exit');

@@ -198,12 +198,8 @@ export function mountPlayer(root, { file, next, onNext }) {
     clearTimeout(hideTimer);
     hideTimer = null;
     bar.inert = true;
-    // Hidden bar has pointer-events:none but would keep focus, so Space
-    // would activate the off-screen fullscreen button instead of pause.
-    const active = document.activeElement;
-    if (active && bar.contains(active) && typeof active.blur === 'function') {
-      active.blur();
-    }
+    // inert drops focus and tab order. Do not blur here: barHoldsVisible
+    // already keeps the bar up while it contains document.activeElement.
   };
   const showBar = () => {
     bar.inert = false;
@@ -460,7 +456,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   const startOverlayDismissWatch = () => {
     stopNativeWatch();
     const watchUntil = Date.now() + OVERLAY_SILENT_WATCH_MS;
-    nativeWatchTimer = setInterval(() => {
+    const tick = () => {
       if (!wantFull || !container.classList.contains('is-fake-fullscreen')) {
         stopNativeWatch();
         return;
@@ -468,7 +464,11 @@ export function mountPlayer(root, { file, next, onNext }) {
       noteNativeAssigned();
       dismissNativeUnderOverlay();
       if (Date.now() >= watchUntil) stopNativeWatch();
-    }, 50);
+    };
+    // Dismiss immediately: a 50ms interval-only first tick leaves live
+    // leftover native under overlay rotate for one frame.
+    tick();
+    nativeWatchTimer = setInterval(tick, 50);
   };
 
   // Native wins during the wait. Once overlay fallback has been applied,
@@ -529,6 +529,9 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopLeftoverWait();
     if (!wantFull || !waitingNativeFs) return;
     if (container.classList.contains('is-fake-fullscreen')) return;
+    // Leftover wait used Quitter (second ⛶/F exits). Grace wait is not
+    // full yet — restore Plein écran so a tap does not look like exit.
+    btnFull.setAttribute('aria-label', 'Plein écran');
     // Previous requestFullscreen often no-ops while leftover native is still
     // assigned. Re-request and restart grace after that exit actually lands.
     armNativeWait();
@@ -596,8 +599,13 @@ export function mountPlayer(root, { file, next, onNext }) {
     // height:100% without position:fixed, which collapses the player for the
     // ~400ms grace on no-op phones. Class is applied when native lands or
     // overlay fallback runs.
-    btnFull.setAttribute('aria-label', 'Plein écran');
     waitingNativeFs = true;
+    // Leftover native is still on screen: ⛶/F exits, so the control must
+    // read Quitter. Grace wait stays Plein écran (second tap must not abort overlay).
+    btnFull.setAttribute(
+      'aria-label',
+      leftoverNative && waitingNativeFs ? 'Quitter le plein écran' : 'Plein écran'
+    );
     if (leftoverNative) {
       // Do not request while leftover native is still assigned (often a no-op).
       // Bound the wait so a hung prior exit cannot stall toggleFull; the
