@@ -412,6 +412,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeGrace();
     container.classList.add('is-fullscreen', 'is-fake-fullscreen');
     document.documentElement.classList.add('player-fs');
+    btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     tryLockLandscape();
     syncForcedLandscape();
   };
