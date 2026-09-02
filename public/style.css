@@ -698,20 +698,39 @@ html.player-fs body {
 
 .center-play {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: clamp(72px, 18vmin, 128px);
+  font-weight: 400;
   line-height: 1;
   color: var(--sanem-accent);
   background: transparent;
-  pointer-events: none;
+  border: none;
+  padding: 0.12em;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
   z-index: 3;
+  cursor: pointer;
   text-shadow:
     0 0 10px var(--sanem-accent),
     0 0 28px color-mix(in srgb, var(--sanem-accent) 70%, transparent),
     0 4px 24px rgba(0, 0, 0, 0.7);
+}
+
+button.center-play:hover {
+  transform: translate(-50%, -50%);
+  background: transparent;
+  box-shadow: none;
+}
+
+button.center-play:focus-visible {
+  outline: 3px solid var(--sanem-accent);
+  outline-offset: 10px;
 }
 
 .ctl {

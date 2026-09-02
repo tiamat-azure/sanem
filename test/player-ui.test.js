@@ -492,6 +492,14 @@ const SNAPSHOT = `({
     const el = document.querySelector('.center-play');
     return Boolean(el) && !el.hidden;
   })(),
+  centerPlayTag: document.querySelector('.center-play')?.tagName ?? null,
+  centerPlayLabel: document.querySelector('.center-play')?.getAttribute('aria-label') ?? null,
+  centerPlayAriaHidden: document.querySelector('.center-play')?.getAttribute('aria-hidden') ?? null,
+  centerPlayPointerEvents: (() => {
+    const el = document.querySelector('.center-play');
+    if (!el || el.hidden) return null;
+    return getComputedStyle(el).pointerEvents;
+  })(),
   endOverlay: (() => {
     const el = document.querySelector('.next-overlay');
     return Boolean(el) && !el.hidden && el.classList.contains('is-end');
@@ -651,6 +659,10 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.paused, true, 'tap on playing video with hidden toolbar pauses');
   assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
   assert.equal(ui.centerPlay, true, 'paused state shows the center play icon');
+  assert.equal(ui.centerPlayTag, 'BUTTON', 'center play must be a real button');
+  assert.equal(ui.centerPlayLabel, 'Lire', 'center play must have an accessible name');
+  assert.equal(ui.centerPlayAriaHidden, null, 'center play must not be aria-hidden');
+  assert.notEqual(ui.centerPlayPointerEvents, 'none', 'center play must receive pointer events');
   assert.equal(ui.toolbarPlay, false);
 
   await tapVideoCenter(send);
@@ -667,6 +679,38 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'toolbar fades 2s after resume');
   assert.equal(ui.paused, false);
+});
+
+uiTest('center play button is named and usable by click and keyboard', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await tapVideoCenter(send);
+  await waitFor(send, 'document.querySelector("video")?.paused === true');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.centerPlay, true);
+  assert.equal(ui.centerPlayTag, 'BUTTON');
+  assert.equal(ui.centerPlayLabel, 'Lire');
+  assert.equal(ui.centerPlayAriaHidden, null);
+  assert.notEqual(ui.centerPlayPointerEvents, 'none');
+  assert.equal(ui.toolbarPlay, false, 'play/pause must not live on the bottom toolbar');
+
+  await clickSelector(send, 'button.center-play');
+  await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false, 'clicking the center play button resumes playback');
+  assert.equal(ui.centerPlay, false);
+
+  await tapVideoCenter(send);
+  await waitFor(send, 'document.querySelector("video")?.paused === true');
+  await evaluate(send, 'document.querySelector("button.center-play").focus()');
+  const active = await evaluate(send, 'document.activeElement?.classList.contains("center-play") === true');
+  assert.equal(active, true, 'center play button is focusable');
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false, 'keyboard activation of the center play button resumes playback');
+  assert.equal(ui.centerPlay, false);
 });
 
 uiTest('native fullscreen is used on a portrait phone when the API works', async (t) => {

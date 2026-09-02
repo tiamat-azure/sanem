@@ -75,7 +75,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   const thirdR = el('div', 'touch-third touch-right');
   touch.append(thirdL, thirdC, thirdR);
   const seekHint = el('div', 'seek-hint', { hidden: '' });
-  const centerPlay = el('div', 'center-play', { hidden: '', 'aria-hidden': 'true' });
+  const centerPlay = el('button', 'center-play', {
+    type: 'button',
+    'aria-label': 'Lire',
+    hidden: '',
+  });
   centerPlay.textContent = '▶';
 
   const bar = el('div', 'control-bar');
@@ -165,6 +169,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     btnMute.textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
     const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
     centerPlay.hidden = !video.paused || atEnd;
+    centerPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
   }
 
   let hideTimer = null;
@@ -216,6 +221,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (video.paused) video.play().catch(() => {});
     else video.pause();
   };
+  centerPlay.addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePlay();
+  });
   const seekBy = (delta) => {
     const d = video.duration || file.duration || 0;
     let t = Math.max(0, video.currentTime + delta);
@@ -532,7 +541,8 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (heldMs >= 500) return;
 
       if (dir === 'center') {
-        // single tap: pause+show while playing, play while paused (icon is visual)
+        // single tap: pause+show while playing, play while paused
+        // (the center button is the named control; this is the surface)
         // double tap toggles fullscreen
         tapCount += 1;
         clearTimeout(tapTimer);
@@ -578,6 +588,8 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     switch (e.key) {
       case ' ':
+        // Native buttons already activate on Space; don't toggle twice.
+        if (e.target.closest('button')) return;
         e.preventDefault();
         togglePlay();
         showBar();
