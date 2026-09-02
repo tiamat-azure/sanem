@@ -281,7 +281,11 @@ export function mountPlayer(root, { file, next, onNext }) {
     progress.setPointerCapture(e.pointerId);
     scrubTo(e.clientX);
   });
-  progress.addEventListener('pointermove', (e) => scrubbing && scrubTo(e.clientX));
+  progress.addEventListener('pointermove', (e) => {
+    if (!scrubbing) return;
+    showBar();
+    scrubTo(e.clientX);
+  });
   progress.addEventListener('pointerup', (e) => {
     scrubbing = false;
     progress.releasePointerCapture(e.pointerId);
@@ -374,8 +378,10 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   const syncForcedLandscape = () => {
     const native = nativeFsEl() === container;
-    if (native && wantFull) container.classList.remove('is-fake-fullscreen');
-    const fake = wantFull && !native && container.classList.contains('is-fake-fullscreen');
+    const overlay = container.classList.contains('is-fake-fullscreen');
+    // Overlay already applied: keep it even if native assigns later.
+    if (native && wantFull && !overlay) container.classList.remove('is-fake-fullscreen');
+    const fake = wantFull && overlay;
     const rotate = fake && isPortrait() && isPhone();
     if (!rotate) container.classList.remove('is-forced-landscape');
     container.classList.toggle('is-forced-landscape', rotate);
@@ -385,9 +391,11 @@ export function mountPlayer(root, { file, next, onNext }) {
     );
   };
 
-  // Native always wins, even after finish/overlay already ran. Also used
-  // when fullscreenElement is assigned without a second change event.
+  // Native wins during the wait. Once overlay fallback has been applied,
+  // stay overlay — do not snap to a late native assignment.
   const adoptNativeSuccess = () => {
+    // Overlay already applied at grace: stay overlay, no native snap.
+    if (container.classList.contains('is-fake-fullscreen')) return false;
     if (nativeFsEl() !== container) return false;
     nativeElOnRequest = true;
     sawNativeFs = true;
@@ -416,6 +424,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       return;
     }
     stopNativeGrace();
+    stopNativeWatch();
     container.classList.add('is-fullscreen', 'is-fake-fullscreen');
     document.documentElement.classList.add('player-fs');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
@@ -428,7 +437,8 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
   // often land a tick later. Wait for that (or a short grace) before overlay.
-  // Watch after overlay is bounded: tests assign as late as 700ms.
+  // Watch during the wait only; overlay fallback stops it so a late native
+  // assign cannot flash from fake-fs to native.
   const NATIVE_FS_GRACE_MS = 400;
   const NATIVE_FS_WATCH_MS = 900;
 

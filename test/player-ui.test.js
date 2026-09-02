@@ -997,7 +997,7 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
 });
 
-uiTest('late native fullscreen overrides overlay fallback', async (t) => {
+uiTest('late native fullscreen does not override overlay fallback', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-late');
   await tapSelector(send, 'button[aria-label="Plein écran"]');
@@ -1010,24 +1010,16 @@ uiTest('late native fullscreen overrides overlay fallback', async (t) => {
   assert.equal(ui.fakeFs, true, 'grace timeout applies overlay before a very late native assign');
   assert.equal(ui.fs, true, 'is-fullscreen applies after overlay fallback');
   assert.equal(ui.nativeFs, false);
-  await waitFor(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      return (document.fullscreenElement || document.webkitFullscreenElement) === el
-        && !el.classList.contains('is-fake-fullscreen');
-    })()`
-  );
+  await new Promise((r) => setTimeout(r, 500));
   ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fakeFs, true, 'stay overlay; do not snap to native after grace');
   assert.equal(ui.fs, true);
   assert.equal(ui.htmlFs, true);
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
-  assert.equal(ui.fakeFs, false, 'native success must drop overlay after the grace timeout');
-  assert.equal(ui.forcedLandscape, false, 'native success must drop forced landscape');
+  assert.equal(ui.forcedLandscape, true, 'phone overlay in portrait keeps forced landscape');
 });
 
-uiTest('silent late webkit assign is adopted without a second event', async (t) => {
+uiTest('silent late webkit assign does not snap overlay to native', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-late-silent');
   await tapSelector(send, 'button[aria-label="Plein écran"]');
@@ -1035,19 +1027,12 @@ uiTest('silent late webkit assign is adopted without a second event', async (t) 
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
   );
-  await waitFor(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      return (document.fullscreenElement || document.webkitFullscreenElement) === el
-        && !el.classList.contains('is-fake-fullscreen');
-    })()`
-  );
+  await new Promise((r) => setTimeout(r, 500));
   const ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.nativeFs, true);
-  assert.equal(ui.fakeFs, false, 'watch loop must strip overlay when fullscreenElement appears with no event');
-  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.fakeFs, true, 'watch must not strip overlay after grace for a silent late assign');
+  assert.equal(ui.forcedLandscape, true);
   assert.equal(ui.fs, true);
+  assert.equal(ui.htmlFs, true);
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
 });
 
