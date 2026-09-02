@@ -310,8 +310,11 @@ export function mountPlayer(root, { file, next, onNext }) {
     progress.releasePointerCapture(e.pointerId);
   });
   progress.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft') seekBy(-10);
-    if (e.key === 'ArrowRight') seekBy(10);
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    e.stopPropagation();
+    seekBy(e.key === 'ArrowLeft' ? -10 : 10);
+    showBar();
   });
 
   // --- fullscreen (on the container, never <video>) ---
@@ -712,8 +715,14 @@ export function mountPlayer(root, { file, next, onNext }) {
     barActivePointers.delete(e.pointerId);
     showBar();
   };
-  document.addEventListener('pointerup', onBarPointerEnd);
-  document.addEventListener('pointercancel', onBarPointerEnd);
+  const stopHoldSeeks = [];
+  const onHoldPointerEnds = [];
+  const onDocPointerEnd = (e) => {
+    onBarPointerEnd(e);
+    for (const fn of onHoldPointerEnds) fn(e);
+  };
+  document.addEventListener('pointerup', onDocPointerEnd);
+  document.addEventListener('pointercancel', onDocPointerEnd);
   bar.addEventListener('pointerenter', (e) => {
     if (e.pointerType === 'touch') return;
     pointerInBar = true;
@@ -734,10 +743,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   function bindThird(node, dir) {
     let tapCount = 0;
     let tapTimer = null;
-    let holdTimer = null;
-    let holdInterval = null;
+    let holdTimer = 0;
+    let holdInterval = 0;
     let holdStart = 0;
     let downAt = 0;
+    let holdPointerId = null;
 
     const flushTaps = () => {
       if (tapCount === 0) return;
@@ -750,11 +760,47 @@ export function mountPlayer(root, { file, next, onNext }) {
       seekHint.hidden = true;
     };
 
+    const stopHoldSeek = (resume) => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = 0;
+      }
+      const active = Boolean(holdInterval);
+      if (holdInterval) {
+        clearInterval(holdInterval);
+        holdInterval = 0;
+      }
+      holdPointerId = null;
+      if (!active) return;
+      holdSeeking = false;
+      if (resume) {
+        Promise.resolve(video.play())
+          .catch(() => {})
+          .finally(() => render());
+      } else {
+        render();
+      }
+    };
+    stopHoldSeeks.push(() => stopHoldSeek(false));
+    onHoldPointerEnds.push((e) => {
+      if (holdPointerId == null || e.pointerId !== holdPointerId) return;
+      // Node pointerup still handles taps when the event lands on this third
+      // (including captured slide-off). Document end covers release off-node.
+      if (e.type === 'pointerup' && (e.target === node || node.contains(e.target))) return;
+      stopHoldSeek(true);
+    });
+
     node.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       downAt = Date.now();
       holdStart = Date.now();
       if (dir === 'center') return;
+      holdPointerId = e.pointerId;
+      try {
+        node.setPointerCapture(e.pointerId);
+      } catch {
+        // Synthetic tests / some browsers: document pointerup still ends hold.
+      }
       holdTimer = setTimeout(() => {
         holdSeeking = true;
         centerPlay.hidden = true;
@@ -773,16 +819,9 @@ export function mountPlayer(root, { file, next, onNext }) {
     node.addEventListener('pointerup', (e) => {
       e.preventDefault();
       const heldMs = Date.now() - downAt;
-      clearTimeout(holdTimer);
-      if (holdInterval) {
-        clearInterval(holdInterval);
-        holdInterval = null;
-        holdSeeking = false;
-        Promise.resolve(video.play())
-          .catch(() => {})
-          .finally(() => render());
-        return;
-      }
+      const wasHolding = Boolean(holdInterval);
+      stopHoldSeek(true);
+      if (wasHolding) return;
       if (heldMs >= 500) return;
 
       if (dir === 'center') {
@@ -809,15 +848,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     });
 
     node.addEventListener('pointercancel', () => {
-      clearTimeout(holdTimer);
-      if (holdInterval) {
-        clearInterval(holdInterval);
-        holdInterval = null;
-        holdSeeking = false;
-        Promise.resolve(video.play())
-          .catch(() => {})
-          .finally(() => render());
-      }
+      stopHoldSeek(true);
     });
   }
   bindThird(thirdL, 'left');
@@ -864,8 +895,9 @@ export function mountPlayer(root, { file, next, onNext }) {
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('webkitfullscreenchange', onFsChange);
-    document.removeEventListener('pointerup', onBarPointerEnd);
-    document.removeEventListener('pointercancel', onBarPointerEnd);
+    document.removeEventListener('pointerup', onDocPointerEnd);
+    document.removeEventListener('pointercancel', onDocPointerEnd);
+    for (const stop of stopHoldSeeks) stop();
     window.removeEventListener('orientationchange', onOrientation);
     window.removeEventListener('resize', onOrientation);
     clearTimeout(hideTimer);

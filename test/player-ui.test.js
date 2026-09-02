@@ -824,6 +824,58 @@ uiTest('hold-to-seek on a side third does not show the center play icon', async 
   assert.equal(ui.centerPlay, false, 'center play hides again once playback resumes');
 });
 
+uiTest('hold-to-seek ends when the pointer is released off the third', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-left');
+      if (!el) throw new Error('missing .touch-left');
+      const opts = { bubbles: true, cancelable: true, pointerId: 13, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 700));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'hold-to-seek pauses the video');
+  assert.equal(ui.centerPlay, false, 'center play must stay hidden during the hold');
+  await evaluate(
+    send,
+    `(function(){
+      document.body.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 13,
+        pointerType: 'touch',
+      }));
+    })()`
+  );
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false, 'release off the third must end hold-seek and resume');
+  assert.equal(ui.centerPlay, false, 'ended hold must not leave the play control hidden');
+});
+
+uiTest('hold-to-seek stops when the player is destroyed mid-hold', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-right');
+      const opts = { bubbles: true, cancelable: true, pointerId: 14, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 700));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'hold-to-seek pauses before next-episode');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+});
+
 uiTest('hold-to-seek shows center play if resume play is blocked', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
@@ -1117,6 +1169,40 @@ uiTest('keydown on a focused bar control refreshes auto-hide', async (t) => {
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true, 'keydown while a bar control is focused must reset auto-hide');
   assert.equal(ui.paused, false);
+});
+
+uiTest('progress arrow keys seek once, not doubled by the document handler', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  const t1 = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      Object.defineProperty(v, 'duration', { configurable: true, get() { return 100; } });
+      v.currentTime = 40;
+      document.querySelector('.progress').focus();
+      document.querySelector('.progress').dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        bubbles: true,
+        cancelable: true,
+      }));
+      return v.currentTime;
+    })()`
+  );
+  assert.equal(t1, 50, 'progress ArrowRight must seek +10s, not +20s from a bubbling document handler');
+  const t2 = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      document.querySelector('.progress').dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowLeft',
+        bubbles: true,
+        cancelable: true,
+      }));
+      return v.currentTime;
+    })()`
+  );
+  assert.equal(t2, 40, 'progress ArrowLeft must seek -10s, not -20s');
 });
 
 uiTest('keyboard focus on the control bar holds it visible', async (t) => {
