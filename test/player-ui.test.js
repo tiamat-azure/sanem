@@ -401,6 +401,34 @@ async function installFullscreenStub(send, behavior) {
   await evaluate(send, script);
 }
 
+async function tapVideoCenter(send) {
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-center');
+      if (!el) throw new Error('missing .touch-center');
+      const opts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+    })()`
+  );
+}
+
+async function loopAndPlay(send) {
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.loop = true;
+      v.pause();
+      v.currentTime = 0;
+      await v.play();
+      return true;
+    })()`
+  );
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+}
+
 async function clickFullscreen(send) {
   await tapSelector(send, 'button[aria-label="Plein écran"]');
   // Wait until native was attempted and either overlay fallback or native FS
@@ -444,6 +472,13 @@ const SNAPSHOT = `({
   menuHidden: document.getElementById('app-menu')?.hidden ?? null,
   menuText: document.getElementById('app-menu')?.innerText ?? '',
   controlsVisible: document.querySelector('.player-container')?.classList.contains('controls-visible') ?? false,
+  toolbarPlay: Boolean(document.querySelector('.control-bar .ctl-play')) ||
+    Boolean(document.querySelector('.control-bar [aria-label="Lire"], .control-bar [aria-label="Pause"]')),
+  centerPlay: (() => {
+    const el = document.querySelector('.center-play');
+    return Boolean(el) && !el.hidden;
+  })(),
+  paused: document.querySelector('video')?.paused ?? null,
   fs: document.querySelector('.player-container')?.classList.contains('is-fullscreen') ?? false,
   fakeFs: document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') ?? false,
   forcedLandscape: document.querySelector('.player-container')?.classList.contains('is-forced-landscape') ?? false,
@@ -518,23 +553,13 @@ uiTest('player UI on a smartphone portrait viewport', async (t) => {
   }
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true);
+  assert.equal(ui.toolbarPlay, false, 'play/pause must not live on the bottom toolbar');
   assert.ok(ui.bar, 'control bar is present');
   assert.equal(ui.bar.nextVisible, true, 'next-episode control should be present for wrap check');
   assert.equal(ui.bar.stacked, false, 'toolbar children stacked onto a second line');
   assert.ok(ui.bar.wrap < 8, `toolbar wrapped by ${ui.bar.wrap}px`);
   assert.ok(ui.bar.height < 72, `toolbar height ${ui.bar.height} looks like two rows`);
   assert.ok(ui.bar.width <= ui.viewport.w + 1);
-
-  await clickSelector(send, '.touch-center');
-  await new Promise((r) => setTimeout(r, 350));
-  ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.controlsVisible, false, 'first tap on the video hides the overlay');
-
-  await clickSelector(send, '.touch-center');
-  await new Promise((r) => setTimeout(r, 350));
-  ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.controlsVisible, true, 'second tap shows the overlay again');
-  assert.ok(ui.bar.wrap < 8, `toolbar wrapped after toggle by ${ui.bar.wrap}px`);
 
   await installFullscreenStub(send, 'reject');
   await clickFullscreen(send);
@@ -579,6 +604,51 @@ uiTest('player UI on a smartphone landscape viewport', async (t) => {
   assert.ok(Math.abs(ui.player.w - ui.viewport.w) < 8, `fs width ${ui.player.w} vs ${ui.viewport.w}`);
   assert.ok(Math.abs(ui.player.h - ui.viewport.h) < 8, `fs height ${ui.player.h} vs ${ui.viewport.h}`);
   assert.ok(ui.player.w > ui.player.h, 'landscape fullscreen is wider than it is tall');
+});
+
+uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.toolbarPlay, false, 'no play/pause control on the bottom toolbar');
+
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await new Promise((r) => setTimeout(r, 1500));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false);
+  assert.equal(ui.controlsVisible, true, 'toolbar must stay visible before the 2s hide delay');
+  assert.equal(ui.centerPlay, false, 'center play icon is hidden while playing');
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    1500
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'toolbar auto-hides 2s after playback starts');
+  assert.equal(ui.paused, false);
+
+  await tapVideoCenter(send);
+  await waitFor(send, 'document.querySelector("video")?.paused === true');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'tap on playing video with hidden toolbar pauses');
+  assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
+  assert.equal(ui.centerPlay, true, 'paused state shows the center play icon');
+  assert.equal(ui.toolbarPlay, false);
+
+  await tapVideoCenter(send);
+  await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false, 'tap on paused video resumes playback');
+  assert.equal(ui.centerPlay, false, 'center play icon hides once playing');
+  assert.equal(ui.controlsVisible, true, 'toolbar is shown on resume');
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'toolbar fades 2s after resume');
+  assert.equal(ui.paused, false);
 });
 
 uiTest('native fullscreen is used on a portrait phone when the API works', async (t) => {

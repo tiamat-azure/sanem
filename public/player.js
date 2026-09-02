@@ -14,6 +14,7 @@ const POS_PREFIX = 'sanem-pos:';
 const WATCHED_PREFIX = 'sanem-watched:';
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
+const BAR_HIDE_MS = 2000;
 
 const fmtTime = (s) => {
   if (!Number.isFinite(s) || s < 0) s = 0;
@@ -73,10 +74,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   const thirdR = el('div', 'touch-third touch-right');
   touch.append(thirdL, thirdC, thirdR);
   const seekHint = el('div', 'seek-hint', { hidden: '' });
+  const centerPlay = el('div', 'center-play', { hidden: '', 'aria-hidden': 'true' });
+  centerPlay.textContent = '▶';
 
   const bar = el('div', 'control-bar');
-  const btnPlay = el('button', 'ctl ctl-play', { type: 'button', 'aria-label': 'Lire' });
-  btnPlay.textContent = '▶';
 
   const progress = el('div', 'progress', { role: 'slider', 'aria-label': 'Progression', tabindex: '0' });
   const progBuffer = el('div', 'progress-buffer');
@@ -107,13 +108,12 @@ export function mountPlayer(root, { file, next, onNext }) {
   const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
   btnFull.textContent = '⛶';
 
-  // Skip ±10s lives on the keyboard and on the lateral touch zones — dedicated
-  // overlay buttons were redundant and forced the bar onto a second row.
-  bar.append(btnPlay, progress, time, btnMute, volume, speed, btnNext, btnFull);
+  // Play/pause lives on the center surface (Netflix-style icon), not the bar.
+  bar.append(progress, time, btnMute, volume, speed, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
 
-  container.append(video, touch, seekHint, nextOverlay, bar);
+  container.append(video, touch, centerPlay, seekHint, nextOverlay, bar);
   root.appendChild(container);
 
   // --- source wiring ---
@@ -161,10 +161,25 @@ export function mountPlayer(root, { file, next, onNext }) {
       progBuffer.style.width = d ? `${(bEnd / d) * 100}%` : '0%';
     }
     time.textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
-    btnPlay.textContent = video.paused ? '▶' : '⏸';
-    btnPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
     btnMute.textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
+    const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
+    centerPlay.hidden = !video.paused || atEnd;
   }
+
+  let hideTimer = null;
+  const hideBar = () => {
+    container.classList.remove('controls-visible');
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  };
+  const showBar = () => {
+    container.classList.add('controls-visible');
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    if (!video.paused) {
+      hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
+    }
+  };
 
   video.addEventListener('timeupdate', () => {
     render();
@@ -174,8 +189,14 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
   });
   video.addEventListener('progress', render);
-  video.addEventListener('play', render);
-  video.addEventListener('pause', render);
+  video.addEventListener('play', () => {
+    render();
+    showBar();
+  });
+  video.addEventListener('pause', () => {
+    render();
+    showBar();
+  });
   video.addEventListener('volumechange', render);
   video.addEventListener('ended', () => {
     clearPosition(file.path);
@@ -183,6 +204,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     else {
       nextOverlay.hidden = false;
       nextOverlay.classList.add('is-end');
+      render();
     }
   });
 
@@ -199,7 +221,6 @@ export function mountPlayer(root, { file, next, onNext }) {
     onNext(next || null);
   };
 
-  btnPlay.addEventListener('click', togglePlay);
   btnNext.addEventListener('click', goNext);
 
   const nextBtnOverlay = el('button', 'ctl', { type: 'button' });
@@ -426,24 +447,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   window.addEventListener('orientationchange', onOrientation);
   window.addEventListener('resize', onOrientation);
 
-  // --- overlay toolbar: tap the surface to hide, tap again to show ---
-  let hideTimer = null;
-  const hideBar = () => {
-    container.classList.remove('controls-visible');
-    clearTimeout(hideTimer);
-    hideTimer = null;
-  };
-  const showBar = () => {
-    container.classList.add('controls-visible');
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      if (!video.paused) hideBar();
-    }, 3000);
-  };
-  const toggleBar = () => {
-    if (container.classList.contains('controls-visible')) hideBar();
-    else showBar();
-  };
   showBar();
   container.addEventListener('pointermove', (e) => {
     // Mouse movement refreshes an already-visible bar; it must not undo a tap-hide.
@@ -501,23 +504,25 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (heldMs >= 500) return;
 
       if (dir === 'center') {
-        // single tap toggles the overlay; double tap toggles fullscreen
+        // single tap: pause+show while playing, play while paused (icon is visual)
+        // double tap toggles fullscreen
         tapCount += 1;
         clearTimeout(tapTimer);
         tapTimer = setTimeout(() => {
           if (tapCount >= 2) toggleFull();
-          else toggleBar();
+          else if (video.paused) video.play().catch(() => {});
+          else video.pause();
           tapCount = 0;
         }, 280);
         return;
       }
 
-      // lateral: first tap toggles the overlay; further taps in 800ms seek
+      // lateral: first tap shows the overlay; further taps in 800ms seek
       tapCount += 1;
       if (tapCount === 1) {
         clearTimeout(tapTimer);
         tapTimer = setTimeout(() => {
-          if (tapCount === 1) toggleBar();
+          if (tapCount === 1) showBar();
           tapCount = 0;
         }, 300);
         return;

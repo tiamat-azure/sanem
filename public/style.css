@@ -691,6 +691,21 @@ html.player-fs body {
   pointer-events: auto;
 }
 
+.center-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(72px, 18vmin, 128px);
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.92);
+  background: transparent;
+  pointer-events: none;
+  z-index: 3;
+  text-shadow: 0 4px 28px rgba(0, 0, 0, 0.55);
+}
+
 .ctl {
   min-width: 46px;
   min-height: 46px;
@@ -703,12 +718,6 @@ html.player-fs body {
   border: 1px solid rgba(255, 255, 255, 0.15);
   color: #fff;
   border-radius: 10px;
-}
-
-.ctl-play {
-  background: #fff;
-  color: #05060d;
-  border: none;
 }
 
 .ctl-next {
