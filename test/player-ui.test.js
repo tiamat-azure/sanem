@@ -329,6 +329,7 @@ async function tapSelector(send, selector) {
 async function installFullscreenStub(send, behavior) {
   const script = `(function(){
     window.__fsRequests = 0;
+    window.__fsExits = 0;
     let fsEl = null;
     Object.defineProperty(document, 'fullscreenElement', {
       configurable: true,
@@ -339,6 +340,7 @@ async function installFullscreenStub(send, behavior) {
       get() { return fsEl; },
     });
     const exit = function() {
+      window.__fsExits += 1;
       fsEl = null;
       document.dispatchEvent(new Event('fullscreenchange'));
       return Promise.resolve();
@@ -346,16 +348,28 @@ async function installFullscreenStub(send, behavior) {
     document.exitFullscreen = exit;
     document.webkitExitFullscreen = exit;
     const behavior = ${JSON.stringify(behavior)};
-    if (behavior === 'webkit-delayed') {
+    const installPrefixed = (delayMs, emptyFirst, fireOnAssign) => {
       Element.prototype.requestFullscreen = undefined;
       Element.prototype.webkitRequestFullscreen = function() {
         window.__fsRequests += 1;
         const node = this;
+        if (emptyFirst) document.dispatchEvent(new Event('webkitfullscreenchange'));
         setTimeout(() => {
           fsEl = node;
-          document.dispatchEvent(new Event('webkitfullscreenchange'));
-        }, 200);
+          if (fireOnAssign) document.dispatchEvent(new Event('webkitfullscreenchange'));
+        }, delayMs);
       };
+    };
+    if (behavior === 'webkit-delayed') {
+      installPrefixed(200, false, true);
+      return;
+    }
+    if (behavior === 'webkit-late') {
+      installPrefixed(700, true, true);
+      return;
+    }
+    if (behavior === 'webkit-late-silent') {
+      installPrefixed(700, true, false);
       return;
     }
     const impl = function() {
@@ -422,7 +436,10 @@ const SNAPSHOT = `({
     const el = document.querySelector('.player-container');
     return (document.fullscreenElement || document.webkitFullscreenElement) === el;
   })(),
+  htmlFs: document.documentElement.classList.contains('player-fs'),
+  fsLabel: document.querySelector('.player-container button[aria-label="Plein écran"], .player-container button[aria-label="Quitter le plein écran"]')?.getAttribute('aria-label') ?? null,
   fsRequests: window.__fsRequests ?? 0,
+  fsExits: window.__fsExits ?? 0,
   player: (() => {
     const el = document.querySelector('.player-container');
     if (!el) return null;
@@ -597,6 +614,79 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   assert.equal(ui.nativeFs, true);
   assert.equal(ui.fakeFs, false, 'late webkit fullscreen must not keep the CSS overlay');
   assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
+});
+
+uiTest('late native fullscreen overrides overlay fallback', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'webkit-late');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
+  );
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1);
+  assert.equal(ui.fakeFs, true, 'grace timeout applies overlay before a very late native assign');
+  assert.equal(ui.nativeFs, false);
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      return (document.fullscreenElement || document.webkitFullscreenElement) === el
+        && !el.classList.contains('is-fake-fullscreen');
+    })()`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fs, true);
+  assert.equal(ui.htmlFs, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fakeFs, false, 'native success must drop overlay after the grace timeout');
+  assert.equal(ui.forcedLandscape, false, 'native success must drop forced landscape');
+});
+
+uiTest('silent late webkit assign is adopted without a second event', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'webkit-late-silent');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
+  );
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      return (document.fullscreenElement || document.webkitFullscreenElement) === el
+        && !el.classList.contains('is-fake-fullscreen');
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fakeFs, false, 'watch loop must strip overlay when fullscreenElement appears with no event');
+  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+uiTest('exiting during the grace window aborts a late native enter', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'webkit-delayed');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
+  await waitFor(send, '(window.__fsExits ?? 0) >= 1');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, false, 'late native enter after cancel must be exited');
+  assert.equal(ui.fs, false);
+  assert.equal(ui.htmlFs, false, 'player-fs must not return after cancel');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.ok(ui.fsExits >= 1);
 });
 
 uiTest('narrow desktop window still tries native fullscreen', async (t) => {
