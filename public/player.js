@@ -174,14 +174,15 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   let hideTimer = null;
   let pointerInBar = false;
+  const barActivePointers = new Set();
   const hoverHoldBar = () =>
     window.matchMedia('(hover: hover)').matches &&
     window.matchMedia('(pointer: fine)').matches &&
     bar.matches(':hover');
-  // Mouse/pen inside the bar holds controls-visible so the 2s timer cannot
-  // slide the bar out from under the cursor (click would then miss the
-  // control and pause the surface). Touch still uses the 2s timer.
-  const barHoldsVisible = () => pointerInBar || hoverHoldBar();
+  // Mouse/pen hover or an active pointer on the bar holds controls-visible
+  // so the 2s timer cannot hide it under the cursor/finger.
+  const barHoldsVisible = () =>
+    pointerInBar || hoverHoldBar() || barActivePointers.size > 0;
   const hideBar = () => {
     if (barHoldsVisible()) {
       clearTimeout(hideTimer);
@@ -367,6 +368,8 @@ export function mountPlayer(root, { file, next, onNext }) {
   // previous session cannot adopt leftover native or abort a new wait.
   let fsGen = 0;
   let leftoverNative = false;
+  const NATIVE_FS_GRACE_MS = 400;
+  const OVERLAY_SILENT_WATCH_MS = 1600;
 
   const stopNativeGrace = () => {
     waitingNativeFs = false;
@@ -396,6 +399,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   const pumpNativeSample = () => {
     nativeSampleRaf = 0;
     if (!waitingNativeFs) return;
+    if (leftoverNative) {
+      if (nativeFsEl() !== container) resumeNativeAfterLeftover();
+      else nativeSampleRaf = window.requestAnimationFrame(pumpNativeSample);
+      return;
+    }
     noteNativeAssigned();
     if (adoptNativeSuccess()) return;
     nativeSampleRaf = window.requestAnimationFrame(pumpNativeSample);
@@ -437,6 +445,7 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   const startOverlayDismissWatch = () => {
     stopNativeWatch();
+    const watchUntil = Date.now() + OVERLAY_SILENT_WATCH_MS;
     nativeWatchTimer = setInterval(() => {
       if (!wantFull || !container.classList.contains('is-fake-fullscreen')) {
         stopNativeWatch();
@@ -444,6 +453,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       }
       noteNativeAssigned();
       dismissNativeUnderOverlay();
+      if (Date.now() >= watchUntil) stopNativeWatch();
     }, 50);
   };
 
@@ -484,8 +494,9 @@ export function mountPlayer(root, { file, next, onNext }) {
     document.documentElement.classList.add('player-fs');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     tryLockLandscape();
-    // Overlay watch dismisses silent late native for as long as overlay is
-    // on, without adopting. Wait-phase sampling is rAF until the 400ms grace.
+    // Overlay watch dismisses silent late native for a bounded window after
+    // grace (fullscreenchange still dismisses after that). Wait-phase
+    // sampling is rAF until the 400ms grace.
     startOverlayDismissWatch();
     syncForcedLandscape();
   };
@@ -496,8 +507,45 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
   // often land a tick later. rAF samples until the 400ms grace, then overlay.
-  // Overlay then has its own dismiss sampler for silent late native (no adopt).
-  const NATIVE_FS_GRACE_MS = 400;
+  // Overlay then has a bounded dismiss sampler for silent late native (no adopt).
+  const resumeNativeAfterLeftover = () => {
+    leftoverNative = false;
+    nativeElOnRequest = false;
+    if (!wantFull || !waitingNativeFs) return;
+    // Previous requestFullscreen often no-ops while leftover native is still
+    // assigned. Re-request and restart grace after that exit actually lands.
+    armNativeWait();
+  };
+
+  const armNativeWait = () => {
+    const gen = fsGen;
+    waitingNativeFs = true;
+    nativeElOnRequest = false;
+    if (nativeGraceTimer) {
+      clearTimeout(nativeGraceTimer);
+      nativeGraceTimer = 0;
+    }
+    stopNativeSample();
+    nativeGraceTimer = setTimeout(() => {
+      nativeGraceTimer = 0;
+      if (gen !== fsGen) return;
+      if (adoptNativeSuccess()) return;
+      applyOverlayFallback();
+    }, NATIVE_FS_GRACE_MS);
+    requestNativeFs(container)
+      .then(() => {
+        if (gen !== fsGen || leftoverNative) return;
+        noteNativeAssigned();
+        if (nativeFsEl() === container) adoptNativeSuccess();
+        else if (waitingNativeFs && nativeElOnRequest && !sawNativeFs) exitFull();
+      })
+      .catch(() => {
+        if (gen !== fsGen || leftoverNative) return;
+        applyOverlayFallback();
+      });
+    noteNativeAssigned();
+    pumpNativeSample();
+  };
 
   const exitFull = () => {
     fsGen += 1;
@@ -522,7 +570,6 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeGrace();
     stopNativeWatch();
     fsGen += 1;
-    const gen = fsGen;
     leftoverNative = nativeFsEl() === container;
     wantFull = true;
     sawNativeFs = false;
@@ -533,25 +580,13 @@ export function mountPlayer(root, { file, next, onNext }) {
     // overlay fallback runs.
     btnFull.setAttribute('aria-label', 'Plein écran');
     waitingNativeFs = true;
-    nativeGraceTimer = setTimeout(() => {
-      nativeGraceTimer = 0;
-      if (gen !== fsGen) return;
-      if (adoptNativeSuccess()) return;
-      applyOverlayFallback();
-    }, NATIVE_FS_GRACE_MS);
-    requestNativeFs(container)
-      .then(() => {
-        if (gen !== fsGen) return;
-        noteNativeAssigned();
-        if (nativeFsEl() === container) adoptNativeSuccess();
-        else if (waitingNativeFs && nativeElOnRequest && !sawNativeFs) exitFull();
-      })
-      .catch(() => {
-        if (gen !== fsGen) return;
-        applyOverlayFallback();
-      });
-    if (!leftoverNative) noteNativeAssigned();
-    pumpNativeSample();
+    if (leftoverNative) {
+      // Do not request while leftover native is still assigned (often a no-op)
+      // and do not start grace — leftover leave will arm a fresh wait.
+      pumpNativeSample();
+      return;
+    }
+    armNativeWait();
   };
   const toggleFull = () => {
     // Wait-only wantFull is not "already full": a second tap/F during the
@@ -567,16 +602,12 @@ export function mountPlayer(root, { file, next, onNext }) {
   const onFsChange = () => {
     if (leftoverNative) {
       if (nativeFsEl() !== container) {
-        leftoverNative = false;
-        nativeElOnRequest = false;
+        resumeNativeAfterLeftover();
+        return;
       }
-      // Leave/enter of a previous native session: do not adopt leftover
-      // and do not abort the new wait.
-      if (leftoverNative || nativeFsEl() !== container) {
-        if (wantFull) {
-          syncForcedLandscape();
-          return;
-        }
+      if (wantFull) {
+        syncForcedLandscape();
+        return;
       }
     }
     noteNativeAssigned();
@@ -624,7 +655,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   container.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'mouse') showBar();
   });
-  const barActivePointers = new Set();
   bar.addEventListener('pointerdown', (e) => {
     barActivePointers.add(e.pointerId);
     showBar();
@@ -634,6 +664,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   const onBarPointerEnd = (e) => {
     barActivePointers.delete(e.pointerId);
+    showBar();
   };
   bar.addEventListener('pointerup', onBarPointerEnd);
   bar.addEventListener('pointercancel', onBarPointerEnd);

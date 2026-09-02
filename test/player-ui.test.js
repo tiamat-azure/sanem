@@ -922,6 +922,48 @@ uiTest('using the control bar refreshes the auto-hide timer', async (t) => {
   assert.equal(ui.paused, false);
 });
 
+uiTest('a stationary finger on the control bar holds it visible', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 4,
+        pointerType: 'touch',
+      }));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 2500));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'active pointer on the bar must not time-hide under the finger');
+  assert.equal(ui.paused, false);
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 4,
+        pointerType: 'touch',
+      }));
+    })()`
+  );
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'pointerup must restart the 2s auto-hide');
+  assert.equal(ui.paused, false);
+});
+
 uiTest('touch pointermove on the bar during a scrub keeps it visible', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
@@ -1027,17 +1069,15 @@ uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) =>
     send,
     `(function(){
       const el = document.querySelector('.player-container');
-      if (!el) return false;
-      return el.classList.contains('is-fullscreen')
-        || el.classList.contains('is-fake-fullscreen')
-        || (document.fullscreenElement || document.webkitFullscreenElement) === el;
+      return (document.fullscreenElement || document.webkitFullscreenElement) === el;
     })()`
   );
-  await new Promise((r) => setTimeout(r, 400));
   ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran', 'previous exit leave must not abort the new session');
+  assert.equal(ui.nativeFs, true, 'after leftover native leaves, re-request must adopt native');
+  assert.equal(ui.fakeFs, false, 'rapid re-enter must not drop to overlay');
   assert.equal(ui.fs, true);
-  assert.ok(ui.nativeFs || ui.fakeFs, 're-enter must keep native or overlay fullscreen');
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.ok(ui.fsRequests >= 2, 'leftover leave must issue a new native request');
 });
 
 uiTest('video surface double-tap does not toggle fullscreen', async (t) => {
