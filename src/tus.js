@@ -8,6 +8,7 @@ import { Server } from '@tus/server';
 import { FileStore } from '@tus/file-store';
 import { config } from './config.js';
 import { resolveFinalPath } from './filename.js';
+import { analyzeMedia } from './transcode.js';
 
 const uploadsDir = path.join(config.dataDir, 'uploads');
 const tmpDir = path.join(config.dataDir, 'tmp');
@@ -33,27 +34,55 @@ async function removeSidecar(id) {
   await fs.rm(path.join(tmpDir, `${id}.json`), { force: true });
 }
 
+// §6.5 - verify no residue carrying <id> remains in tmp/, and log it.
+async function sweepResidue(id) {
+  const entries = await fs.readdir(tmpDir).catch(() => []);
+  const leftover = entries.filter((name) => name.startsWith(id));
+  if (leftover.length > 0) {
+    console.warn(`[sanem] tus: removing ${leftover.length} tmp residue for ${id}`);
+    await Promise.all(
+      leftover.map((name) => fs.rm(path.join(tmpDir, name), { force: true }))
+    );
+  }
+}
+
 export const tusServer = new Server({
   path: '/files',
   datastore: fileStore,
   relativeLocation: true,
   respectForwardedHeaders: true,
   maxSize: config.maxFileGb * 1024 * 1024 * 1024,
-  namingFunction: (req, metadata) => {
-    void req;
-    void metadata;
-    return crypto.randomUUID();
-  },
+  namingFunction: () => crypto.randomUUID(),
   onUploadFinish: async (req, upload) => {
     void req;
-    const rawName = upload.metadata?.filename ?? null;
-    const { finalName, finalPath } = resolveFinalPath(uploadsDir, rawName);
+    const filename = upload.metadata?.filename ?? null;
+    const relativePath = upload.metadata?.relativePath ?? null;
     const tmpPath = upload.storage?.path ?? path.join(tmpDir, upload.id);
 
-    await moveToUploads(tmpPath, finalPath);
-    await removeSidecar(upload.id);
+    let dest;
+    try {
+      dest = await resolveFinalPath(uploadsDir, filename, relativePath);
+    } catch (err) {
+      console.warn(`[sanem] tus: rejected upload ${upload.id}: ${err.message}`);
+      await fs.rm(tmpPath, { force: true }).catch(() => {});
+      await removeSidecar(upload.id).catch(() => {});
+      const rejection = new Error('unsafe_upload_path');
+      rejection.status_code = 400;
+      rejection.body = 'Upload rejected: unsafe path.';
+      throw rejection;
+    }
 
-    console.log(`[sanem] tus: finalized upload "${finalName}" (${upload.size} bytes)`);
+    await moveToUploads(tmpPath, dest.finalPath);
+    await removeSidecar(upload.id);
+    await sweepResidue(upload.id);
+
+    console.log(
+      `[sanem] tus: finalized "${dest.relativePath}" (${upload.size} bytes)`
+    );
+
+    // §6.6 - trigger media analysis (ffprobe + thumbnail) without blocking
+    // the tus response. Fire-and-forget: errors are handled inside.
+    analyzeMedia(dest.relativePath);
 
     return {};
   },

@@ -13,13 +13,16 @@ import { authRouter, requireSession } from './auth.js';
 import { filesRouter } from './files.js';
 import { tusServer, scheduleTusExpirationCleanup } from './tus.js';
 import { scheduleTmpCleanup } from './cleanup.js';
+import { warmMediaCache } from './transcode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
 
 function ensureStorageDirs() {
-  fs.mkdirSync(path.join(config.dataDir, 'uploads'), { recursive: true });
-  fs.mkdirSync(path.join(config.dataDir, 'tmp'), { recursive: true });
+  // The four storage directories are created at startup if missing (PRD §6).
+  for (const name of ['uploads', 'tmp', 'thumbs', 'transcode']) {
+    fs.mkdirSync(path.join(config.dataDir, name), { recursive: true });
+  }
 }
 
 ensureStorageDirs();
@@ -60,6 +63,7 @@ app.use((err, req, res, next) => {
 
 scheduleTmpCleanup(path.join(config.dataDir, 'tmp'), config.tmpTtlHours);
 scheduleTusExpirationCleanup();
+warmMediaCache().catch((err) => console.warn('[sanem] media cache warm failed', err));
 
 app.listen(config.port, () => {
   console.log(`[sanem] listening on port ${config.port}, data dir ${config.dataDir}`);
