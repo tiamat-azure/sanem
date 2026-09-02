@@ -411,6 +411,18 @@ async function installFullscreenStub(send, behavior) {
       installPrefixed(1500, true, false);
       return;
     }
+    if (behavior === 'succeed-slow-exit') {
+      exitDelayMs = 250;
+      const impl = function() {
+        window.__fsRequests += 1;
+        fsEl = this;
+        queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+        return Promise.resolve();
+      };
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     if (behavior === 'succeed-then-leave') {
       const impl = function() {
         window.__fsRequests += 1;
@@ -745,6 +757,36 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.paused, false);
 });
 
+uiTest('hold-to-seek on a side third does not show the center play icon', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-left');
+      if (!el) throw new Error('missing .touch-left');
+      const opts = { bubbles: true, cancelable: true, pointerId: 11, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 700));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'hold-to-seek pauses the video');
+  assert.equal(ui.centerPlay, false, 'center play must stay hidden for the whole hold');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-left');
+      const opts = { bubbles: true, cancelable: true, pointerId: 11, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+    })()`
+  );
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false);
+  assert.equal(ui.centerPlay, false, 'center play hides again once playback resumes');
+});
+
 uiTest('mouse move reveals a hidden toolbar', async (t) => {
   const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   await loopAndPlay(send);
@@ -951,6 +993,17 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
     'document.activeElement && document.querySelector(".control-bar")?.contains(document.activeElement)'
   );
   assert.equal(focused, false, 'hide must blur the off-screen bar control');
+  const inert = await evaluate(send, 'Boolean(document.querySelector(".control-bar")?.inert)');
+  assert.equal(inert, true, 'hidden bar must be inert so it leaves the tab order');
+  const canFocusHidden = await evaluate(
+    send,
+    `(function(){
+      const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
+      btn.focus();
+      return document.activeElement === btn;
+    })()`
+  );
+  assert.equal(canFocusHidden, false, 'inert bar controls must not take focus');
   await evaluate(
     send,
     `document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))`
@@ -960,6 +1013,31 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
   assert.equal(ui.fsRequests, 0, 'Space must not fire the off-screen fullscreen control');
   assert.equal(ui.fs, false);
   assert.equal(ui.nativeFs, false);
+});
+
+uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed-slow-exit');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      if (!el) return false;
+      return el.classList.contains('is-fullscreen')
+        || el.classList.contains('is-fake-fullscreen')
+        || (document.fullscreenElement || document.webkitFullscreenElement) === el;
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran', 'previous exit leave must not abort the new session');
+  assert.equal(ui.fs, true);
+  assert.ok(ui.nativeFs || ui.fakeFs, 're-enter must keep native or overlay fullscreen');
 });
 
 uiTest('video surface double-tap does not toggle fullscreen', async (t) => {

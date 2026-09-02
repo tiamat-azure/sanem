@@ -155,6 +155,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
 
   // --- rendering ---
+  let holdSeeking = false;
   function render() {
     const d = video.duration || file.duration || 0;
     const c = video.currentTime || 0;
@@ -167,7 +168,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     time.textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
     btnMute.textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
     const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
-    centerPlay.hidden = !video.paused || atEnd;
+    centerPlay.hidden = !video.paused || atEnd || holdSeeking;
     centerPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
   }
 
@@ -190,6 +191,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     container.classList.remove('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
+    bar.inert = true;
     // Hidden bar has pointer-events:none but would keep focus, so Space
     // would activate the off-screen fullscreen button instead of pause.
     const active = document.activeElement;
@@ -198,6 +200,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
   };
   const showBar = () => {
+    bar.inert = false;
     container.classList.add('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
@@ -360,6 +363,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   // True while exitFullscreen is in flight under overlay. Real exit is async,
   // so the watch must not re-call it, and overlay rotate must stay put.
   let exitingNativeUnderOverlay = false;
+  // Bumped on every enter/exit so in-flight request/grace/leave from a
+  // previous session cannot adopt leftover native or abort a new wait.
+  let fsGen = 0;
+  let leftoverNative = false;
 
   const stopNativeGrace = () => {
     waitingNativeFs = false;
@@ -383,6 +390,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
   };
   const noteNativeAssigned = () => {
+    if (leftoverNative) return;
     if (nativeFsEl() === container) nativeElOnRequest = true;
   };
   const pumpNativeSample = () => {
@@ -443,6 +451,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   // stay overlay — cancel a late native assignment instead of snapping.
   const adoptNativeSuccess = () => {
     if (dismissNativeUnderOverlay()) return false;
+    if (leftoverNative) return false;
     if (nativeFsEl() !== container) return false;
     nativeElOnRequest = true;
     sawNativeFs = true;
@@ -475,24 +484,24 @@ export function mountPlayer(root, { file, next, onNext }) {
     document.documentElement.classList.add('player-fs');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     tryLockLandscape();
-    // Wait-watch would keep calling adoptNativeSuccess (which returns false
-    // on dismiss) and re-exit until 900ms. Overlay watch dismisses silent
-    // late native for as long as overlay is on, without adopting.
+    // Overlay watch dismisses silent late native for as long as overlay is
+    // on, without adopting. Wait-phase sampling is rAF until the 400ms grace.
     startOverlayDismissWatch();
     syncForcedLandscape();
   };
 
   const isFull = () =>
-    container.classList.contains('is-fullscreen') || nativeFsEl() === container;
+    container.classList.contains('is-fullscreen') ||
+    (wantFull && !leftoverNative && nativeFsEl() === container);
 
   // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
-  // often land a tick later. Wait for that (or a short grace) before overlay.
-  // The 900ms wait-watch stops when overlay applies; overlay then has its
-  // own dismiss sampler for silent late native (no adopt, no 900ms cap).
+  // often land a tick later. rAF samples until the 400ms grace, then overlay.
+  // Overlay then has its own dismiss sampler for silent late native (no adopt).
   const NATIVE_FS_GRACE_MS = 400;
-  const NATIVE_FS_WATCH_MS = 900;
 
   const exitFull = () => {
+    fsGen += 1;
+    leftoverNative = false;
     wantFull = false;
     sawNativeFs = false;
     nativeElOnRequest = false;
@@ -512,6 +521,9 @@ export function mountPlayer(root, { file, next, onNext }) {
   const enterFull = () => {
     stopNativeGrace();
     stopNativeWatch();
+    fsGen += 1;
+    const gen = fsGen;
+    leftoverNative = nativeFsEl() === container;
     wantFull = true;
     sawNativeFs = false;
     nativeElOnRequest = false;
@@ -523,23 +535,22 @@ export function mountPlayer(root, { file, next, onNext }) {
     waitingNativeFs = true;
     nativeGraceTimer = setTimeout(() => {
       nativeGraceTimer = 0;
+      if (gen !== fsGen) return;
       if (adoptNativeSuccess()) return;
       applyOverlayFallback();
     }, NATIVE_FS_GRACE_MS);
-    const watchStarted = Date.now();
-    nativeWatchTimer = setInterval(() => {
-      noteNativeAssigned();
-      if (adoptNativeSuccess()) return;
-      if (Date.now() - watchStarted >= NATIVE_FS_WATCH_MS) stopNativeWatch();
-    }, 50);
     requestNativeFs(container)
       .then(() => {
+        if (gen !== fsGen) return;
         noteNativeAssigned();
         if (nativeFsEl() === container) adoptNativeSuccess();
         else if (waitingNativeFs && nativeElOnRequest && !sawNativeFs) exitFull();
       })
-      .catch(() => applyOverlayFallback());
-    noteNativeAssigned();
+      .catch(() => {
+        if (gen !== fsGen) return;
+        applyOverlayFallback();
+      });
+    if (!leftoverNative) noteNativeAssigned();
     pumpNativeSample();
   };
   const toggleFull = () => {
@@ -554,6 +565,20 @@ export function mountPlayer(root, { file, next, onNext }) {
     toggleFull();
   });
   const onFsChange = () => {
+    if (leftoverNative) {
+      if (nativeFsEl() !== container) {
+        leftoverNative = false;
+        nativeElOnRequest = false;
+      }
+      // Leave/enter of a previous native session: do not adopt leftover
+      // and do not abort the new wait.
+      if (leftoverNative || nativeFsEl() !== container) {
+        if (wantFull) {
+          syncForcedLandscape();
+          return;
+        }
+      }
+    }
     noteNativeAssigned();
     // After overlay, still listen: cancel native, do not adopt.
     if (dismissNativeUnderOverlay()) {
@@ -651,6 +676,8 @@ export function mountPlayer(root, { file, next, onNext }) {
       holdStart = Date.now();
       if (dir === 'center') return;
       holdTimer = setTimeout(() => {
+        holdSeeking = true;
+        centerPlay.hidden = true;
         video.pause();
         holdInterval = setInterval(() => {
           const held = Date.now() - holdStart;
@@ -670,6 +697,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (holdInterval) {
         clearInterval(holdInterval);
         holdInterval = null;
+        holdSeeking = false;
         video.play();
         return;
       }
@@ -703,6 +731,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (holdInterval) {
         clearInterval(holdInterval);
         holdInterval = null;
+        holdSeeking = false;
         video.play();
       }
     });
