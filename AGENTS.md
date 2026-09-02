@@ -2,87 +2,100 @@
 
 ## What this project does
 
-Sanem is a self-hosted web service for receiving large files (~1.5 GB average) from remote
-friends via drag & drop, over a resumable upload protocol, exposed publicly through
-Tailscale Funnel. Single shared password, no accounts, no file management features (see
-PRD.md §1 for full scope and explicit out-of-scope items).
+Sanem is a self-hosted web service with two journeys, exposed publicly through Tailscale
+Funnel behind a single shared password (no accounts):
 
-**PRD.md is the binding specification.** Technical choices marked "imposé" in it are
-locked; do not deviate without asking the project owner first. The `Makefile` is one
-explicitly approved exception to the PRD §3 file tree (operational convenience, added on
-request).
+- **Putum** (drop): remote friends drag & drop large files (~1.5 GB animes) over the
+  resumable tus protocol. Uploads resume automatically after a network cut.
+- **Lukluk** (watch): after login, browse a video library, stream in a custom player with
+  next-episode chaining, or download. Non-playable files stay listed and downloadable.
+
+A first-level folder in `uploads/` is a **series** - the only, deliberately flat, unit of
+organization (one folder level max).
+
+**PRD.md is the binding specification.** Choices marked "imposé" are locked; do not
+deviate without asking the project owner. The `Makefile` is the one approved exception to
+the PRD §3 file tree. Threat model note: from v3, the password also gates *read* access to
+all content (PRD §8) - never weaken the `/api/login` rate limiting.
 
 ## Commands
 
-A `Makefile` wraps the common operations; run `make help` for the full list (`start`,
-`stop`, `restart`, `status`, `logs`, `build`, `test`, `lint`, `funnel-start`,
-`funnel-stop`, `funnel-status`). Prefer it over raw `docker compose`/`tailscale`
-invocations.
+`make help` lists all targets (`start`, `stop`, `restart`, `status`, `logs`, `build`,
+`test`, `lint`, `funnel-start/stop/status`). Prefer it over raw `docker compose`/
+`tailscale`.
 
 ```bash
 npm install
-npm start          # node src/server.js - requires SANEM_PASSWORD and
-                    # SANEM_SESSION_SECRET env vars, see .env.example
-make test           # node --test - unit + integration tests
-make lint            # eslint .
-
-make start           # full stack via docker compose, reads .env
+npm start          # requires SANEM_PASSWORD + SANEM_SESSION_SECRET, see .env.example
+npm test           # node --test - unit + integration; run before every change
+npm run lint       # eslint .
+make start         # full stack via docker compose, reads .env
 ```
+
+`ffmpeg`/`ffprobe` are system binaries from the Docker image, not npm deps. Tests never
+require them (missing binary => `playback: "none"`).
 
 ## Architecture
 
 - `src/server.js` - Express bootstrap, route mounting order (see Known pitfalls).
 - `src/config.js` - env var validation, fails fast on startup (PRD §5).
-- `src/auth.js` - session cookie, `/api/login`, `/api/logout`, `/api/session`, rate
-  limiting.
-- `src/tus.js` - `@tus/server` + `@tus/file-store` instance mounted at `/files`,
-  `onUploadFinish` hook does the tmp -> uploads rename and sidecar cleanup.
-- `src/filename.js` - sanitizes/deduplicates upload filenames (PRD §9, security-critical).
-- `src/cleanup.js` - safety-net sweep of orphaned files in `tmp/` (PRD §7).
-- `src/files.js` - `GET /api/files` listing.
-- `public/` - single-page frontend: `index.html` + `app.js` (Uppy v5 via CDN, no bundler)
-  - `style.css` (neon dark theme).
-- `test/filename.test.js`, `test/resume.test.js` - see Tests below.
+- `src/auth.js` - session cookie, `/api/login|logout|session`, rate limiting.
+- `src/tus.js` - `@tus/server` + `@tus/file-store` at `/files`; `onUploadFinish` does the
+  tmp -> `uploads/<series>/` rename, sidecar cleanup, and fires non-blocking media probe.
+- `src/filename.js` - path sanitization + dedup, returns `(folder, name)`, one folder
+  level max, realpath containment assertion (PRD §9, security-critical).
+- `src/files.js` - `GET /api/files`, tree listing + media metadata.
+- `src/media.js` - `GET /api/media|download/*splat`, direct read + `Range`/`206`.
+- `src/transcode.js` - `ffprobe`, compat matrix, on-demand segmented HLS (PRD §10).
+- `src/thumbs.js` - thumbnail extraction + cache (PRD §10.6).
+- `src/cleanup.js` - `tmp/` safety-net sweep + `transcode/` LRU purge (PRD §7).
+- `public/` - `index.html` + `app.js` (screen router, Uppy dashboard, library) +
+  `player.js` (custom controls, touch zones, next episode) + `style.css` (neon theme).
+- `test/` - `filename.test.js`, `media.test.js`, `resume.test.js` (see Tests).
 
-Full API table, storage layout, and finalization steps: PRD.md §6-8.
+Full API table, storage layout, transcode matrix: PRD §6-10.
 
 ## Code conventions
 
-- Plain Node.js ESM (`type: module`), no bundler, no frontend framework - Uppy is loaded
-  via `<script>` from a pinned CDN URL in `public/index.html`.
-- Dependency versions in `package.json` are pinned exactly (no `^`/`~`); update the PRD
-  reasoning if you ever need to bump one.
+- Plain Node.js ESM (`type: module`), no bundler, no frontend framework. Uppy v5 and
+  hls.js load via pinned CDN `<script>` in `public/index.html`.
+- `package.json` versions pinned exactly (no `^`/`~`); no new npm dep in v3.
 - Comments and code in English; UI copy in French (PRD §2).
+- `ffmpeg`/`ffprobe` via `execFile` with an argument array, never a shell string.
 
 ## Tests
 
-- `test/filename.test.js` - unit tests for path traversal, unicode, truncation, dedup.
-- `test/resume.test.js` - spawns the real server on an ephemeral port, uploads a ~50 MB
-  file with `tus-js-client`, aborts after 2 chunks, resumes on the same upload URL, and
-  asserts the offset didn't reset to zero, the final hash matches, and `tmp/` is empty.
-  This is the project's main guardrail; do not weaken it.
-- Run everything with `npm test` before considering a change done.
+- `test/filename.test.js` - path traversal, Windows separators, unicode, truncation,
+  per-folder dedup, symlinked series folder rejected, `a/b/c/d.mkv` -> `c/d.mkv`.
+- `test/media.test.js` - `Range` -> `206` + exact bytes, encoded `../` -> `404`, the four
+  media routes -> `401` without a session cookie.
+- `test/resume.test.js` - real server on an ephemeral port, ~50 MB upload with
+  `tus-js-client`, abort after 2 chunks, resume on the same URL, assert offset didn't
+  reset, final hash matches, `tmp/` empty. **Main guardrail; never weaken or slow it** -
+  this is why media probing is non-blocking.
 
 ## Known pitfalls
 
-- Mounting a body parser before the `/files` route breaks tus `PATCH` requests (it
-  consumes the stream) - `express.json()` is scoped to `/api` only in `server.js`.
-- Express 5's `path-to-regexp` v8 requires a named wildcard: `/files/*splat`, not `*`.
-- `tus-js-client` needs an explicit `chunkSize` (8 MB, PRD §10) or it sends the whole file
-  in one `PATCH`, which defeats resumability.
-- Behind Tailscale Funnel, cookies need `app.set('trust proxy', 1)` or `Secure` cookies
-  never get set and login loops forever.
-- Funnel only exposes ports 443/8443/10000 publicly; never try to expose the local port
-  (3900) directly.
-- `node:22-alpine` runs as root by default - `docker-compose.yml` sets `user: "1000:1000"`
-  to avoid root-owned files in `~/sanem-data`; the Dockerfile switches to the image's
-  built-in `node` user (uid/gid 1000).
-- `@tus/file-store` writes a `<id>.json` sidecar per upload; `onUploadFinish` in
-  `src/tus.js` must delete it explicitly, or `tmp/` accumulates orphans.
+One line each; full rationale in PRD §13.
 
-Full detail and rationale for each: PRD.md §12.
+- Body parser before `/files` consumes the stream and breaks tus `PATCH` -
+  `express.json()` is scoped to `/api` only.
+- Express 5 `path-to-regexp` v8 needs a named wildcard: `/files/*splat`, and the four
+  `/api/*splat` media routes likewise.
+- Never serve media under `/files/…` (tus prefix) - use `/api/media|hls|thumbs|download`.
+- `tus-js-client` needs explicit `chunkSize` (8 MB) or it sends one giant `PATCH`.
+- Behind Funnel, cookies need `app.set('trust proxy', 1)` or login loops forever.
+- Funnel exposes only ports 443/8443/10000; never expose local 3900 directly.
+- `node:22-alpine` runs as root - compose sets `user: "1000:1000"`, Dockerfile uses the
+  built-in `node` user; ensure it can write `thumbs/` and `transcode/`.
+- `@tus/file-store` writes a `<id>.json` sidecar - `onUploadFinish` must delete it.
+- No media route may block the tus response on `ffprobe`; no access token in a media URL.
+- HLS segment boundaries on copy paths (1-2) must land on real keyframes, not fixed
+  intervals, or the copied stream is unplayable.
+- Fullscreen goes on the player container, never `<video>`, or the custom bar vanishes.
+- At most `SANEM_FFMPEG_CONCURRENCY` (default 1) ffmpeg processes: uploads come first.
 
 ## Configuration
 
-Env vars are documented in `.env.example` and validated in `src/config.js`. Never add a
-variable outside that set without updating both files and the PRD table (§5).
+Env vars documented in `.env.example`, validated in `src/config.js`. Never add a variable
+outside that set without updating both files and the PRD table (§5).

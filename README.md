@@ -1,8 +1,33 @@
 # Sanem
 
-Envoie de gros fichiers (vidéos, animes, ~1,5 Go et plus) à distance, par simple
-glisser-déposer dans un navigateur, avec reprise automatique après une coupure réseau.
+Reçois de gros fichiers (vidéos, animes, ~1,5 Go et plus) à distance, par simple
+glisser-déposer dans un navigateur, avec reprise automatique après une coupure réseau
+(**Putum**), puis **consulte, regarde et télécharge** ce qui a été déposé (**Lukluk**).
 Auto-hébergé, exposé sur internet via Tailscale Funnel.
+
+Un dossier de premier niveau dans `uploads/` est une **série** : c'est la seule notion
+d'organisation, volontairement plate (un niveau de dossier au maximum). Les fichiers non
+lisibles dans un navigateur restent listés et téléchargeables ; les `.mkv` en H.264 sont
+remuxés à la demande, les autres codecs (HEVC, AC-3/DTS…) transcodés en HLS.
+
+## Modèle de menace v3 - risque assumé
+
+En v2, Sanem ne faisait que recevoir : le pire cas, pour qui devinait le mot de passe,
+était de déposer des fichiers indésirables.
+
+**À partir de la v3, quiconque connaît le mot de passe partagé peut lire et télécharger la
+totalité des fichiers déposés, y compris ceux déposés par d'autres.** Le mot de passe
+n'est plus seulement une autorisation d'écriture : c'est la seule protection en lecture de
+l'ensemble du contenu.
+
+Ce risque est **connu et assumé** pour ce POC. Le minimum de 5 caractères du §5 est
+maintenu et le mode Lukluk n'est pas restreint derrière une condition supplémentaire. En
+conséquence :
+
+- Le rate limiting reste l'unique rempart, et son assouplissement devient d'autant plus
+  inacceptable.
+- Le propriétaire du projet est responsable du choix d'un mot de passe à la hauteur de ce
+  qu'il expose, et non du minimum technique autorisé par `src/config.js`.
 
 ## Prérequis
 
@@ -42,13 +67,16 @@ Un `Makefile` regroupe les opérations courantes ; `make help` liste toutes les 
 
 ## Configuration (`.env`)
 
-| Variable               | Description                                                     |
-| ---------------------- | --------------------------------------------------------------- |
-| `SANEM_PASSWORD`       | Mot de passe partagé (≥ 5 caractères), obligatoire.             |
-| `SANEM_SESSION_SECRET` | Secret de signature des cookies (≥ 32 caractères), obligatoire. |
-| `SANEM_PORT`           | Port local d'écoute. Défaut : `3900`.                           |
-| `SANEM_TMP_TTL_HOURS`  | Délai avant qu'un upload inachevé soit nettoyé. Défaut : `48`.  |
-| `SANEM_MAX_FILE_GB`    | Taille maximale par fichier. Défaut : `20`.                     |
+| Variable                   | Description                                                     |
+| -------------------------- | --------------------------------------------------------------- |
+| `SANEM_PASSWORD`           | Mot de passe partagé (≥ 5 caractères), obligatoire.             |
+| `SANEM_SESSION_SECRET`     | Secret de signature des cookies (≥ 32 caractères), obligatoire. |
+| `SANEM_PORT`               | Port local d'écoute. Défaut : `3900`.                           |
+| `SANEM_TMP_TTL_HOURS`      | Délai avant qu'un upload inachevé soit nettoyé. Défaut : `48`.  |
+| `SANEM_MAX_FILE_GB`        | Taille maximale par fichier. Défaut : `20`.                     |
+| `SANEM_TRANSCODE_CACHE_GB` | Taille max du cache de segments HLS (purge LRU). Défaut : `20`. |
+| `SANEM_FFMPEG_CONCURRENCY` | Processus `ffmpeg` simultanés max. Défaut : `1`.                |
+| `SANEM_X264_PRESET`        | Preset `libx264` du ré-encodage (voie 3). Défaut : `veryfast`.  |
 
 `docker-compose.yml` accepte aussi `SANEM_DATA_DIR_HOST` (variable de déploiement, hors
 application) pour forcer le chemin hôte du volume de stockage si la résolution de
@@ -81,9 +109,12 @@ firewalls/proxys restrictifs qui bloquent les ports non standards) ; adapter
 
 ## Fichiers reçus
 
-Les fichiers finalisés arrivent dans `~/sanem-data/uploads/` sur la machine hôte. Le
-dossier `~/sanem-data/tmp/` contient les uploads en cours (protocole tus) ; il doit rester
-vide en dehors des transferts actifs.
+Les fichiers finalisés arrivent dans `~/sanem-data/uploads/` sur la machine hôte, à la
+racine ou dans un sous-dossier de série (`~/sanem-data/uploads/<série>/`). Le dossier
+`~/sanem-data/tmp/` contient les uploads en cours (protocole tus) ; il doit rester vide en
+dehors des transferts actifs. Les dossiers `~/sanem-data/thumbs/` et
+`~/sanem-data/transcode/` sont des caches régénérables : les supprimer ne provoque aucune
+perte de donnée.
 
 ## Dépannage
 
@@ -95,7 +126,14 @@ vide en dehors des transferts actifs.
 - **Fichiers appartenant à `root` dans `~/sanem-data`** : ne jamais lancer le conteneur
   sans l'option `user: "1000:1000"` du `docker-compose.yml`.
 - **`docker compose up` échoue au démarrage** : `SANEM_PASSWORD` ou `SANEM_SESSION_SECRET`
-  absent ou trop court — voir le message d'erreur explicite dans les logs.
+  absent ou trop court - voir le message d'erreur explicite dans les logs.
+- **Lecture vidéo lente, mise en tampon longue** : sur une source HEVC/AV1 ou au-delà de
+  1080p, l'encodage `libx264` logiciel ne tient pas toujours le temps réel. Le
+  téléchargement est alors plus confortable. Le confort de lecture via Funnel (relais DERP
+  possibles) n'est pas garanti par la qualité du lecteur.
+- **« Analyse en cours » qui ne se termine pas** : `ffmpeg`/`ffprobe` doivent être
+  présents dans l'image Docker (`apk add ffmpeg`). Sans eux, le fichier reste
+  téléchargeable mais non lisible.
 
 ## Développement
 

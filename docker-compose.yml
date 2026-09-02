@@ -13,6 +13,9 @@ services:
       - SANEM_SESSION_SECRET=${SANEM_SESSION_SECRET}
       - SANEM_TMP_TTL_HOURS=${SANEM_TMP_TTL_HOURS:-48}
       - SANEM_MAX_FILE_GB=${SANEM_MAX_FILE_GB:-20}
+      - SANEM_TRANSCODE_CACHE_GB=${SANEM_TRANSCODE_CACHE_GB:-20}
+      - SANEM_FFMPEG_CONCURRENCY=${SANEM_FFMPEG_CONCURRENCY:-1}
+      - SANEM_X264_PRESET=${SANEM_X264_PRESET:-veryfast}
     volumes:
       # ${SANEM_DATA_DIR_HOST} lets deployments override the host path when
       # ${HOME} resolution is unreliable (e.g. snap-packaged Docker
