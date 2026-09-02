@@ -78,7 +78,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   const centerPlay = el('button', 'center-play', {
     type: 'button',
     'aria-label': 'Lire',
-    hidden: '',
   });
   centerPlay.textContent = '▶';
 
@@ -326,12 +325,14 @@ export function mountPlayer(root, { file, next, onNext }) {
   let wantFull = false;
   let waitingNativeFs = false;
   let sawNativeFs = false;
-  // True if fullscreenElement was already the container when requestFullscreen
-  // returned. Distinguishes a short-lived native enter (then leave) from empty
-  // prefixed events that fire before webkit assigns the element.
+  // True once fullscreenElement is observed as the container during this
+  // wait (call return, change event, watch, or rAF) — not only the tick
+  // requestFullscreen() comes back. Distinguishes a short-lived native
+  // enter-then-leave from empty prefixed events before webkit assigns.
   let nativeElOnRequest = false;
   let nativeGraceTimer = 0;
   let nativeWatchTimer = 0;
+  let nativeSampleRaf = 0;
 
   const stopNativeGrace = () => {
     waitingNativeFs = false;
@@ -339,12 +340,30 @@ export function mountPlayer(root, { file, next, onNext }) {
       clearTimeout(nativeGraceTimer);
       nativeGraceTimer = 0;
     }
+    stopNativeSample();
   };
   const stopNativeWatch = () => {
     if (nativeWatchTimer) {
       clearInterval(nativeWatchTimer);
       nativeWatchTimer = 0;
     }
+    stopNativeSample();
+  };
+  const stopNativeSample = () => {
+    if (nativeSampleRaf) {
+      cancelAnimationFrame(nativeSampleRaf);
+      nativeSampleRaf = 0;
+    }
+  };
+  const noteNativeAssigned = () => {
+    if (nativeFsEl() === container) nativeElOnRequest = true;
+  };
+  const pumpNativeSample = () => {
+    nativeSampleRaf = 0;
+    if (!waitingNativeFs) return;
+    noteNativeAssigned();
+    if (adoptNativeSuccess()) return;
+    nativeSampleRaf = requestAnimationFrame(pumpNativeSample);
   };
 
   const syncForcedLandscape = () => {
@@ -364,6 +383,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   // when fullscreenElement is assigned without a second change event.
   const adoptNativeSuccess = () => {
     if (nativeFsEl() !== container) return false;
+    nativeElOnRequest = true;
     sawNativeFs = true;
     stopNativeGrace();
     stopNativeWatch();
@@ -397,7 +417,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
 
   const isFull = () =>
-    wantFull || container.classList.contains('is-fullscreen') || nativeFsEl() === container;
+    container.classList.contains('is-fullscreen') || nativeFsEl() === container;
 
   // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
   // often land a tick later. Wait for that (or a short grace) before overlay.
@@ -431,7 +451,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     // height:100% without position:fixed, which collapses the player for the
     // ~400ms grace on no-op phones. Class is applied when native lands or
     // overlay fallback runs.
-    btnFull.setAttribute('aria-label', 'Quitter le plein écran');
+    btnFull.setAttribute('aria-label', 'Plein écran');
     waitingNativeFs = true;
     nativeGraceTimer = setTimeout(() => {
       nativeGraceTimer = 0;
@@ -440,18 +460,24 @@ export function mountPlayer(root, { file, next, onNext }) {
     }, NATIVE_FS_GRACE_MS);
     const watchStarted = Date.now();
     nativeWatchTimer = setInterval(() => {
+      noteNativeAssigned();
       if (adoptNativeSuccess()) return;
       if (Date.now() - watchStarted >= NATIVE_FS_WATCH_MS) stopNativeWatch();
     }, 50);
     requestNativeFs(container)
       .then(() => {
+        noteNativeAssigned();
         if (nativeFsEl() === container) adoptNativeSuccess();
         else if (waitingNativeFs && nativeElOnRequest && !sawNativeFs) exitFull();
       })
       .catch(() => applyOverlayFallback());
-    nativeElOnRequest = nativeFsEl() === container;
+    noteNativeAssigned();
+    pumpNativeSample();
   };
   const toggleFull = () => {
+    // Wait-only wantFull is not "already full": a second tap/F during the
+    // native grace (common on iOS no-op) must not abort overlay fallback.
+    if (waitingNativeFs) return;
     if (isFull()) exitFull();
     else enterFull();
   };
@@ -460,11 +486,12 @@ export function mountPlayer(root, { file, next, onNext }) {
     toggleFull();
   });
   const onFsChange = () => {
+    noteNativeAssigned();
     if (adoptNativeSuccess()) return;
     // Empty prefixed events during the request (element never assigned yet)
-    // must not look like a leave. A short-lived native enter that is already
-    // gone before adopt sees it still sets nativeElOnRequest — stay exited,
-    // do not wait for the grace overlay.
+    // must not look like a leave. Assignment is noted when it lands (this
+    // event, watch, rAF), so a short-lived native enter that is already
+    // gone still stays exited instead of waiting for the grace overlay.
     if (waitingNativeFs && !sawNativeFs) {
       if (nativeElOnRequest) {
         exitFull();
@@ -491,6 +518,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   window.addEventListener('resize', onOrientation);
 
   showBar();
+  render();
   container.addEventListener('pointermove', (e) => {
     // Mouse movement refreshes an already-visible bar; it must not undo a tap-hide.
     if (e.pointerType === 'mouse' && container.classList.contains('controls-visible')) showBar();
@@ -621,7 +649,9 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   document.addEventListener('keydown', onKey);
 
-  video.play().catch(() => {});
+  video.play().catch(() => {
+    render();
+  });
 
   function cleanup() {
     document.removeEventListener('keydown', onKey);
@@ -639,7 +669,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     video.load();
     stopNativeGrace();
     stopNativeWatch();
-    if (isFull()) exitFull();
+    if (wantFull || isFull()) exitFull();
   }
 
   return { destroy: cleanup };

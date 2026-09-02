@@ -401,6 +401,23 @@ async function installFullscreenStub(send, behavior) {
       Element.prototype.webkitRequestFullscreen = impl;
       return;
     }
+    if (behavior === 'async-brief-enter-leave') {
+      // Assignment lands after the call returns (standard async FS). Note it
+      // on the change event, then leave before overlay grace.
+      const impl = function() {
+        window.__fsRequests += 1;
+        const node = this;
+        return Promise.resolve().then(() => {
+          fsEl = node;
+          document.dispatchEvent(new Event('fullscreenchange'));
+          fsEl = null;
+          queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+        });
+      };
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     const impl = function() {
       window.__fsRequests += 1;
       if (behavior === 'reject') return Promise.reject(new Error('fullscreen denied'));
@@ -459,7 +476,7 @@ async function clickFullscreen(send) {
   );
 }
 
-async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH } = {}) {
+async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH, blockAutoplay = false } = {}) {
   const { baseUrl } = await startServer(t);
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
@@ -472,6 +489,16 @@ async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH } = 
     httpOnly: true,
     path: '/',
   });
+  if (blockAutoplay) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        HTMLMediaElement.prototype.play = function() {
+          this.pause();
+          return Promise.reject(Object.assign(new Error('NotAllowedError'), { name: 'NotAllowedError' }));
+        };
+      })();`,
+    });
+  }
   await send('Page.navigate', { url: `${baseUrl}/#/lukluk/play/${encodeURIComponent(playPath)}` });
   await waitFor(send, 'Boolean(document.querySelector(".player-container"))');
   await waitFor(send, 'Boolean(document.querySelector(".control-bar"))');
@@ -723,6 +750,30 @@ uiTest('center play button is named and usable by click and keyboard', async (t)
   assert.equal(ui.centerPlay, false);
 });
 
+uiTest('center play button is shown when autoplay is blocked', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { blockAutoplay: true }
+  );
+  await waitFor(send, 'Boolean(document.querySelector("button.center-play"))');
+  await waitFor(
+    send,
+    `(() => {
+      const v = document.querySelector('video');
+      const b = document.querySelector('button.center-play');
+      return Boolean(v?.paused && b && !b.hidden);
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'blocked autoplay leaves the video paused');
+  assert.equal(ui.centerPlay, true, 'named play control must be visible before metadata/play');
+  assert.equal(ui.centerPlayTag, 'BUTTON');
+  assert.equal(ui.centerPlayLabel, 'Lire');
+  assert.equal(ui.centerPlayAriaHidden, null);
+  assert.notEqual(ui.centerPlayPointerEvents, 'none');
+});
+
 uiTest('native fullscreen is used on a portrait phone when the API works', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed');
@@ -749,6 +800,28 @@ uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
   assert.ok(longEdge > 800, `expected landscape span, got ${longEdge}`);
 });
 
+uiTest('second fullscreen tap during native wait does not abort overlay fallback', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'noop');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }))`
+  );
+  await waitFor(
+    send,
+    `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true, 'impatient second activation must not cancel overlay fallback');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.htmlFs, true);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
 uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-delayed');
@@ -761,7 +834,7 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   assert.equal(ui.fakeFs, false, 'must not overlay before delayed webkitFullscreenElement is assigned');
   assert.equal(ui.forcedLandscape, false, 'must not rotate during the native wait');
   assert.equal(ui.nativeFs, false, 'webkit assignment is still pending');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, 'Plein écran', 'do not claim fullscreen until native or overlay lands');
   await waitFor(
     send,
     `(function(){
@@ -836,7 +909,10 @@ uiTest('exiting during the grace window aborts a late native enter', async (t) =
   await installFullscreenStub(send, 'webkit-delayed');
   await tapSelector(send, 'button[aria-label="Plein écran"]');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`
+  );
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false);
   assert.equal(ui.htmlFs, false);
@@ -891,6 +967,22 @@ uiTest('brief native enter then leave during wait does not apply overlay', async
   assert.equal(ui.nativeFs, false);
   assert.equal(ui.fs, false, 'must not stay in is-fullscreen after a leave during wait');
   assert.equal(ui.fakeFs, false, 'leave during wait must not apply overlay after grace');
+  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
+});
+
+uiTest('async native enter then leave during wait does not apply overlay', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'async-brief-enter-leave');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  await new Promise((r) => setTimeout(r, 450));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fs, false, 'must not stay in is-fullscreen after an async leave during wait');
+  assert.equal(ui.fakeFs, false, 'async leave during wait must not apply overlay after grace');
   assert.equal(ui.forcedLandscape, false);
   assert.equal(ui.htmlFs, false);
   assert.equal(ui.fsLabel, 'Plein écran');
