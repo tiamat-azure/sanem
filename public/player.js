@@ -3,9 +3,10 @@
 // per-browser resume positions (localStorage). Fullscreen goes on the
 // container, never on <video>, or the custom bar disappears (§13). Always
 // try the native Fullscreen API first (Android Chrome can then hide the
-// browser chrome). CSS overlay + optional landscape rotate is only a
-// fallback when native rejects or is a no-op — never a first choice on
-// phones, and never applied on top of a successful native fullscreen.
+// browser chrome). CSS overlay is the fallback when native rejects, is
+// missing, or is a no-op. CSS landscape rotate is overlay + portrait +
+// phone only — never rotate native fullscreen, and never rotate a
+// tall/narrow desktop window.
 // Do not add is-fullscreen until native lands or overlay fallback applies:
 // the class sets aspect-ratio:auto; height:100% without position:fixed and
 // would collapse the player for ~400ms on no-op phones.
@@ -271,10 +272,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
 
   // --- fullscreen (on the container, never <video>) ---
-  // Native first, including on phones. Overlay + CSS rotate only if the
-  // API rejects, is missing, or resolves without actually fullscreening
-  // the container (common no-op on iOS). Forced landscape is fake-fs +
-  // portrait only — never rotate a successful native fullscreen.
+  // Native first, including on phones. Overlay if the API rejects, is
+  // missing, or resolves without actually fullscreening the container
+  // (common no-op on iOS). Forced landscape is fake-fs + portrait + phone
+  // (coarse pointer) only — never rotate native fullscreen, and never
+  // rotate a tall/narrow desktop window.
   const nativeFsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
   const requestNativeFs = (node) => {
     const fn = node.requestFullscreen || node.webkitRequestFullscreen;
@@ -295,14 +297,17 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
   };
   const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
+  const isPhone = () => window.matchMedia('(pointer: coarse)').matches;
   const tryLockLandscape = () => {
+    if (!isPhone()) return Promise.resolve();
     const lock = screen.orientation?.lock?.('landscape');
     return lock ? Promise.resolve(lock).catch(() => {}) : Promise.resolve();
   };
 
   // wantFull tracks the user's intent. Native requestFullscreen cannot be
   // aborted, so a late webkit assignment after exit must call exitNativeFs
-  // instead of resurrecting player-fs. Overlay+rotate stay a fallback only.
+  // instead of resurrecting player-fs. Overlay is a fallback on any native
+  // failure; CSS rotate stays phone-only.
   let wantFull = false;
   let waitingNativeFs = false;
   let sawNativeFs = false;
@@ -331,8 +336,9 @@ export function mountPlayer(root, { file, next, onNext }) {
     const native = nativeFsEl() === container;
     if (native && wantFull) container.classList.remove('is-fake-fullscreen');
     const fake = wantFull && !native && container.classList.contains('is-fake-fullscreen');
-    if (!fake) container.classList.remove('is-forced-landscape');
-    container.classList.toggle('is-forced-landscape', fake && isPortrait());
+    const rotate = fake && isPortrait() && isPhone();
+    if (!rotate) container.classList.remove('is-forced-landscape');
+    container.classList.toggle('is-forced-landscape', rotate);
     document.documentElement.classList.toggle(
       'player-fs',
       wantFull && (container.classList.contains('is-fullscreen') || native)

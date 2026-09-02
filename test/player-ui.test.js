@@ -903,3 +903,33 @@ uiTest('narrow desktop window still tries native fullscreen', async (t) => {
   assert.equal(ui.fakeFs, false, 'a merely narrow desktop window must not skip native fullscreen');
   assert.equal(ui.forcedLandscape, false, 'native fullscreen must not CSS-rotate in portrait');
 });
+
+uiTest('narrow desktop overlay fallback does not CSS-rotate', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  const before = await evaluate(
+    send,
+    `({
+      w: window.innerWidth,
+      h: window.innerHeight,
+      coarse: window.matchMedia('(pointer: coarse)').matches,
+      portrait: window.matchMedia('(orientation: portrait)').matches,
+    })`
+  );
+  assert.equal(before.w, 500);
+  assert.equal(before.h, 800);
+  assert.equal(before.coarse, false, 'desktop viewport must not be treated as a coarse-pointer phone');
+  assert.equal(before.portrait, true);
+
+  await installFullscreenStub(send, 'reject');
+  await clickFullscreen(send);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fs, true, 'overlay still applies when native fullscreen fails on desktop');
+  assert.equal(ui.fakeFs, true, 'reject on desktop must use the CSS overlay');
+  assert.equal(ui.htmlFs, true);
+  assert.equal(ui.forcedLandscape, false, 'a tall/narrow desktop window must not CSS-rotate');
+  assert.ok(Math.abs(ui.player.w - ui.viewport.w) < 8, `overlay width ${ui.player.w} vs ${ui.viewport.w}`);
+  assert.ok(Math.abs(ui.player.h - ui.viewport.h) < 8, `overlay height ${ui.player.h} vs ${ui.viewport.h}`);
+  assert.ok(ui.player.h > ui.player.w, 'desktop overlay stays portrait, not rotated onto the long edge');
+});
