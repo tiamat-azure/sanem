@@ -1,6 +1,10 @@
 /* Sanem - neon dark theme + responsive breakpoints (PRD §11.4).
    Layout uses clamp()/minmax(), no fixed widths, single stylesheet. */
 
+:root {
+  --sanem-accent: #00E5FF;
+}
+
 :root[data-theme='dark'] {
   --bg: #0b0d17;
   --bg-elevated: #131629;
@@ -194,6 +198,7 @@ button[type='submit'] {
   padding: 0;
   font-size: 1.4rem;
   line-height: 1;
+  color: var(--sanem-accent);
   background: transparent;
   border-color: transparent;
 }
@@ -691,6 +696,43 @@ html.player-fs body {
   pointer-events: auto;
 }
 
+.center-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(72px, 18vmin, 128px);
+  font-weight: 400;
+  line-height: 1;
+  color: var(--sanem-accent);
+  background: transparent;
+  border: none;
+  padding: 0.12em;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: 3;
+  cursor: pointer;
+  text-shadow:
+    0 0 10px var(--sanem-accent),
+    0 0 28px color-mix(in srgb, var(--sanem-accent) 70%, transparent),
+    0 4px 24px rgba(0, 0, 0, 0.7);
+}
+
+button.center-play:hover {
+  transform: translate(-50%, -50%);
+  background: transparent;
+  box-shadow: none;
+}
+
+button.center-play:focus-visible {
+  outline: 3px solid var(--sanem-accent);
+  outline-offset: 10px;
+}
+
 .ctl {
   min-width: 46px;
   min-height: 46px;
@@ -703,12 +745,6 @@ html.player-fs body {
   border: 1px solid rgba(255, 255, 255, 0.15);
   color: #fff;
   border-radius: 10px;
-}
-
-.ctl-play {
-  background: #fff;
-  color: #05060d;
-  border: none;
 }
 
 .ctl-next {
@@ -735,7 +771,7 @@ html.player-fs body {
   flex: 1 1 0;
   height: 6px;
   min-width: 32px;
-  background: rgba(255, 255, 255, 0.2);
+  background: color-mix(in srgb, var(--sanem-accent) 28%, rgba(255, 255, 255, 0.1));
   border-radius: 999px;
   position: relative;
   cursor: pointer;
@@ -760,8 +796,8 @@ html.player-fs body {
 }
 
 .progress-played {
-  background: var(--accent);
-  box-shadow: var(--glow) var(--accent);
+  background: var(--sanem-accent);
+  box-shadow: 0 0 8px var(--sanem-accent), 0 0 18px var(--sanem-accent);
 }
 
 .progress-handle {
