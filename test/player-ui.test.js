@@ -372,6 +372,21 @@ async function installFullscreenStub(send, behavior) {
       installPrefixed(700, true, false);
       return;
     }
+    if (behavior === 'succeed-then-leave') {
+      const impl = function() {
+        window.__fsRequests += 1;
+        fsEl = this;
+        queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+        setTimeout(() => {
+          fsEl = null;
+          document.dispatchEvent(new Event('fullscreenchange'));
+        }, 120);
+        return Promise.resolve();
+      };
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     const impl = function() {
       window.__fsRequests += 1;
       if (behavior === 'reject') return Promise.reject(new Error('fullscreen denied'));
@@ -687,6 +702,35 @@ uiTest('exiting during the grace window aborts a late native enter', async (t) =
   assert.equal(ui.fakeFs, false);
   assert.equal(ui.fsLabel, 'Plein écran');
   assert.ok(ui.fsExits >= 1);
+});
+
+uiTest('system leave during grace does not apply overlay fallback', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed-then-leave');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      return (document.fullscreenElement || document.webkitFullscreenElement) === el;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      const native = (document.fullscreenElement || document.webkitFullscreenElement) === el;
+      return !native && !el.classList.contains('is-fullscreen') && !el.classList.contains('is-fake-fullscreen');
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 450));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fs, false);
+  assert.equal(ui.fakeFs, false, 'system leave during grace must not apply overlay');
+  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
 });
 
 uiTest('narrow desktop window still tries native fullscreen', async (t) => {

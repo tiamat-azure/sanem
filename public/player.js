@@ -276,6 +276,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   // instead of resurrecting player-fs. Overlay+rotate stay a fallback only.
   let wantFull = false;
   let waitingNativeFs = false;
+  let sawNativeFs = false;
   let nativeGraceTimer = 0;
   let nativeWatchTimer = 0;
 
@@ -309,6 +310,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   // when fullscreenElement is assigned without a second change event.
   const adoptNativeSuccess = () => {
     if (nativeFsEl() !== container) return false;
+    sawNativeFs = true;
     stopNativeGrace();
     stopNativeWatch();
     if (!wantFull) {
@@ -328,6 +330,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   const applyOverlayFallback = () => {
     if (adoptNativeSuccess()) return;
     if (!wantFull) return;
+    // Native was entered then left (system UI / back): never cover with overlay.
+    if (sawNativeFs) {
+      exitFull();
+      return;
+    }
     stopNativeGrace();
     container.classList.add('is-fake-fullscreen');
     tryLockLandscape();
@@ -339,10 +346,13 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   // webkitRequestFullscreen returns void; the element and webkitfullscreenchange
   // often land a tick later. Wait for that (or a short grace) before overlay.
+  // Watch after overlay is bounded: tests assign as late as 700ms.
   const NATIVE_FS_GRACE_MS = 400;
+  const NATIVE_FS_WATCH_MS = 900;
 
   const exitFull = () => {
     wantFull = false;
+    sawNativeFs = false;
     stopNativeGrace();
     stopNativeWatch();
     container.classList.remove('is-fullscreen', 'is-fake-fullscreen', 'is-forced-landscape');
@@ -359,6 +369,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeGrace();
     stopNativeWatch();
     wantFull = true;
+    sawNativeFs = false;
     container.classList.add('is-fullscreen');
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
     document.documentElement.classList.add('player-fs');
@@ -368,10 +379,10 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (adoptNativeSuccess()) return;
       applyOverlayFallback();
     }, NATIVE_FS_GRACE_MS);
-    // Catch a late fullscreenElement assignment that never fires a second
-    // change event (and override overlay if native wins after the grace).
+    const watchStarted = Date.now();
     nativeWatchTimer = setInterval(() => {
-      adoptNativeSuccess();
+      if (adoptNativeSuccess()) return;
+      if (Date.now() - watchStarted >= NATIVE_FS_WATCH_MS) stopNativeWatch();
     }, 50);
     requestNativeFs(container)
       .then(() => {
@@ -389,14 +400,15 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   const onFsChange = () => {
     if (adoptNativeSuccess()) return;
-    // Empty prefixed events: keep waiting; timeout/watch re-check nativeFsEl.
-    if (waitingNativeFs) return;
+    // Empty prefixed events: ignore only if native was never observed.
+    if (waitingNativeFs && !sawNativeFs) return;
     if (
       wantFull &&
-      container.classList.contains('is-fullscreen') &&
-      !container.classList.contains('is-fake-fullscreen')
+      (sawNativeFs ||
+        (container.classList.contains('is-fullscreen') &&
+          !container.classList.contains('is-fake-fullscreen')))
     ) {
-      // Esc / system UI left native fullscreen: drop the CSS class too.
+      // Esc / system UI left native fullscreen: drop overlay wait too.
       exitFull();
       return;
     }
@@ -569,6 +581,8 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
     video.removeAttribute('src');
     video.load();
+    stopNativeGrace();
+    stopNativeWatch();
     if (isFull()) exitFull();
   }
 
