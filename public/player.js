@@ -188,8 +188,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     (document.activeElement != null && bar.contains(document.activeElement));
   const hideBar = () => {
     if (barHoldsVisible()) {
+      // Keep re-arming so a hold that later releases (blur, pointerup)
+      // still hides even if focusout/pointerleave did not restart showBar.
       clearTimeout(hideTimer);
-      hideTimer = null;
+      hideTimer = video.paused ? null : setTimeout(hideBar, BAR_HIDE_MS);
       return;
     }
     container.classList.remove('controls-visible');
@@ -208,7 +210,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     container.classList.add('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
-    if (!video.paused && !barHoldsVisible()) {
+    if (!video.paused) {
       hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
     }
   };

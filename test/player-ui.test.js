@@ -1120,9 +1120,19 @@ uiTest('keydown on a focused bar control refreshes auto-hide', async (t) => {
 });
 
 uiTest('keyboard focus on the control bar holds it visible', async (t) => {
-  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  // Landscape so .speed is displayed (hidden under 640px portrait).
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
   await loopAndPlay(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  const speedShown = await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.speed');
+      if (!el) return false;
+      return getComputedStyle(el).display !== 'none';
+    })()`
+  );
+  assert.equal(speedShown, true, 'speed select must be visible so it can take focus');
   await evaluate(send, 'document.querySelector(".speed").focus()');
   const focused = await evaluate(send, 'document.activeElement?.classList.contains("speed") === true');
   assert.equal(focused, true);
