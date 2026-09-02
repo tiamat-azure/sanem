@@ -1010,11 +1010,13 @@ uiTest('late native fullscreen does not override overlay fallback', async (t) =>
   assert.equal(ui.fakeFs, true, 'grace timeout applies overlay before a very late native assign');
   assert.equal(ui.fs, true, 'is-fullscreen applies after overlay fallback');
   assert.equal(ui.nativeFs, false);
-  await new Promise((r) => setTimeout(r, 500));
+  await waitFor(send, '(window.__fsExits ?? 0) >= 1');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fakeFs, true, 'stay overlay; do not snap to native after grace');
   assert.equal(ui.fs, true);
   assert.equal(ui.htmlFs, true);
+  assert.equal(ui.nativeFs, false, 'late native under overlay must be cancelled');
+  assert.ok(ui.fsExits >= 1, 'late native under overlay must call exitFullscreen');
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
   assert.equal(ui.forcedLandscape, true, 'phone overlay in portrait keeps forced landscape');
 });
@@ -1027,12 +1029,14 @@ uiTest('silent late webkit assign does not snap overlay to native', async (t) =>
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
   );
-  await new Promise((r) => setTimeout(r, 500));
+  await waitFor(send, '(window.__fsExits ?? 0) >= 1');
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fakeFs, true, 'watch must not strip overlay after grace for a silent late assign');
   assert.equal(ui.forcedLandscape, true);
   assert.equal(ui.fs, true);
   assert.equal(ui.htmlFs, true);
+  assert.equal(ui.nativeFs, false, 'silent late native under overlay must be cancelled');
+  assert.ok(ui.fsExits >= 1, 'silent late native under overlay must call exitFullscreen');
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
 });
 
