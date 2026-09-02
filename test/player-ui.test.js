@@ -1174,35 +1174,35 @@ uiTest('keydown on a focused bar control refreshes auto-hide', async (t) => {
 uiTest('progress arrow keys seek once, not doubled by the document handler', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
-  const t1 = await evaluate(
+  const bubbled = await evaluate(
     send,
     `(function(){
-      const v = document.querySelector('video');
-      Object.defineProperty(v, 'duration', { configurable: true, get() { return 100; } });
-      v.currentTime = 40;
-      document.querySelector('.progress').focus();
-      document.querySelector('.progress').dispatchEvent(new KeyboardEvent('keydown', {
+      const seen = [];
+      const onDoc = (e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') seen.push(e.key);
+      };
+      document.addEventListener('keydown', onDoc);
+      const progress = document.querySelector('.progress');
+      progress.focus();
+      progress.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'ArrowRight',
         bubbles: true,
         cancelable: true,
       }));
-      return v.currentTime;
-    })()`
-  );
-  assert.equal(t1, 50, 'progress ArrowRight must seek +10s, not +20s from a bubbling document handler');
-  const t2 = await evaluate(
-    send,
-    `(function(){
-      const v = document.querySelector('video');
-      document.querySelector('.progress').dispatchEvent(new KeyboardEvent('keydown', {
+      progress.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'ArrowLeft',
         bubbles: true,
         cancelable: true,
       }));
-      return v.currentTime;
+      document.removeEventListener('keydown', onDoc);
+      return seen;
     })()`
   );
-  assert.equal(t2, 40, 'progress ArrowLeft must seek -10s, not -20s');
+  assert.deepEqual(
+    bubbled,
+    [],
+    'progress arrow keys must stopPropagation so the document handler does not seek a second time'
+  );
 });
 
 uiTest('keyboard focus on the control bar holds it visible', async (t) => {
