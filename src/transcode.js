@@ -214,6 +214,13 @@ export async function analyzeMedia(relPath) {
         size: disk.size,
         info: disk.info,
       });
+      // The probe is cached but its thumbnail may be missing (failed or
+      // interrupted extraction); make sure it gets produced.
+      if (disk.info?.kind === 'video') {
+        import('./thumbs.js')
+          .then((m) => m.ensureThumbnail(relPath, disk.info.duration))
+          .catch(() => {});
+      }
       return;
     }
 

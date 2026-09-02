@@ -51,19 +51,20 @@ Le service écoute en local sur le port `3900` (configurable via `SANEM_PORT`).
 
 Un `Makefile` regroupe les opérations courantes ; `make help` liste toutes les cibles.
 
-| Commande             | Effet                                                               |
-| -------------------- | ------------------------------------------------------------------- |
-| `make start`         | Construit et démarre le conteneur (`docker compose up -d --build`). |
-| `make stop`          | Arrête et supprime le conteneur (`docker compose down`).            |
-| `make restart`       | Enchaîne `stop` puis `start`.                                       |
-| `make status`        | Affiche l'état du conteneur (`docker compose ps`).                  |
-| `make logs`          | Suit les logs en continu (`docker compose logs -f sanem`).          |
-| `make build`         | Construit l'image sans démarrer le conteneur.                       |
-| `make test`          | Lance la suite de tests (`npm test`).                               |
-| `make lint`          | Lance eslint (`npm run lint`).                                      |
-| `make funnel-start`  | Expose le service sur internet via Tailscale Funnel.                |
-| `make funnel-stop`   | Coupe l'exposition Funnel.                                          |
-| `make funnel-status` | Affiche l'état de la configuration Funnel/Serve.                    |
+| Commande             | Effet                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `make start`         | Construit et démarre le conteneur (`docker compose up -d --build`).                                |
+| `make stop`          | Arrête et supprime le conteneur (`docker compose down`).                                           |
+| `make restart`       | Enchaîne `stop` puis `start`.                                                                      |
+| `make status`        | Affiche l'état du conteneur (`docker compose ps`).                                                 |
+| `make logs`          | Suit les logs en continu (`docker compose logs -f sanem`).                                         |
+| `make build`         | Construit l'image sans démarrer le conteneur.                                                      |
+| `make test`          | Lance la suite de tests (`npm test`).                                                              |
+| `make lint`          | Lance eslint (`npm run lint`).                                                                     |
+| `make thumbs`        | Pré-génère les vignettes manquantes (+ cache d'analyse, plans HLS) via l'API du service en marche. |
+| `make funnel-start`  | Expose le service sur internet via Tailscale Funnel.                                               |
+| `make funnel-stop`   | Coupe l'exposition Funnel.                                                                         |
+| `make funnel-status` | Affiche l'état de la configuration Funnel/Serve.                                                   |
 
 ## Configuration (`.env`)
 

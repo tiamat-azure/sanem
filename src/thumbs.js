@@ -86,6 +86,33 @@ export async function extractThumbnail(relPath, durationSeconds) {
   }
 }
 
+/** True when the thumbnail JPEG for this media already exists on disk. */
+async function thumbnailExists(relPath) {
+  try {
+    await fs.access(thumbFileFor(relPath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensures a thumbnail exists for a video whose probe is already cached.
+ * `analyzeMedia`'s fast path (fresh probe cache) never re-reaches
+ * `extractThumbnail`, so a thumbnail whose extraction failed or was
+ * interrupted (e.g. a restart mid-queue) would stay missing forever.
+ * Callers use this fire-and-forget; it is a cheap no-op once the JPEG is
+ * there and never throws.
+ */
+export async function ensureThumbnail(relPath, durationSeconds) {
+  try {
+    if (await thumbnailExists(relPath)) return;
+    await extractThumbnail(relPath, durationSeconds);
+  } catch {
+    // never surfaces to the caller (PRD §10.6)
+  }
+}
+
 /** Removes a thumbnail (source file gone). */
 export async function removeThumbnail(relPath) {
   await fs.rm(thumbFileFor(relPath), { force: true }).catch(() => {});

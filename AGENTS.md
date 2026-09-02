@@ -21,8 +21,10 @@ all content (PRD §8) - never weaken the `/api/login` rate limiting.
 ## Commands
 
 `make help` lists all targets (`start`, `stop`, `restart`, `status`, `logs`, `build`,
-`test`, `lint`, `funnel-start/stop/status`). Prefer it over raw `docker compose`/
-`tailscale`.
+`test`, `lint`, `thumbs`, `funnel-start/stop/status`). Prefer it over raw
+`docker compose`/ `tailscale`. `make thumbs` pre-warms the probe/thumbnail/HLS-plan caches
+by driving the running service's HTTP API - it adds no code, and `thumbs/`/`transcode/`
+stay pure caches (PRD §6, §7.3).
 
 ```bash
 npm install

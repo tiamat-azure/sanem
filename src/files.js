@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { requireSession } from './auth.js';
 import { config } from './config.js';
 import { getMediaInfo, analyzeMedia, looksLikeVideo } from './transcode.js';
+import { ensureThumbnail } from './thumbs.js';
 
 export const filesRouter = Router();
 
@@ -44,6 +45,7 @@ async function listDir(dir, prefix) {
     const stats = await fs.stat(abs);
     const info = getMediaInfo(rel, stats.mtimeMs, stats.size);
     if (!info.ready) analyzeMedia(rel); // lazily (re)analyze on first sight
+    else if (info.kind === 'video') ensureThumbnail(rel, info.duration); // self-heal a missing thumbnail
 
     out.push({
       path: rel,
