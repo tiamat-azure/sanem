@@ -759,6 +759,88 @@ uiTest('using the control bar refreshes the auto-hide timer', async (t) => {
   assert.equal(ui.paused, false);
 });
 
+uiTest('touch pointermove on the bar during a scrub keeps it visible', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await new Promise((r) => setTimeout(r, 1200));
+  await evaluate(
+    send,
+    `(function(){
+      const progress = document.querySelector('.progress');
+      const opts = { bubbles: true, cancelable: true, pointerId: 7, pointerType: 'touch', buttons: 1 };
+      progress.dispatchEvent(new PointerEvent('pointerdown', opts));
+      progress.dispatchEvent(new PointerEvent('pointermove', opts));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 1500));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'captured touch pointermove on the bar must reset auto-hide');
+  assert.equal(ui.paused, false);
+});
+
+uiTest('keydown on a focused bar control refreshes auto-hide', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(send, 'document.querySelector(".progress").focus()');
+  await new Promise((r) => setTimeout(r, 1200));
+  await evaluate(
+    send,
+    `(function(){
+      const progress = document.querySelector('.progress');
+      progress.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        bubbles: true,
+        cancelable: true,
+      }));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 1500));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'keydown while a bar control is focused must reset auto-hide');
+  assert.equal(ui.paused, false);
+});
+
+uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(
+    send,
+    `(function(){
+      const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
+      if (!btn) throw new Error('missing fullscreen button');
+      btn.focus();
+    })()`
+  );
+  let focused = await evaluate(
+    send,
+    'document.activeElement?.getAttribute("aria-label") === "Plein écran"'
+  );
+  assert.equal(focused, true);
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  focused = await evaluate(
+    send,
+    'document.activeElement && document.querySelector(".control-bar")?.contains(document.activeElement)'
+  );
+  assert.equal(focused, false, 'hide must blur the off-screen bar control');
+  await evaluate(
+    send,
+    `document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'Space after hide must pause, not activate the hidden fullscreen button');
+  assert.equal(ui.fsRequests, 0, 'Space must not fire the off-screen fullscreen control');
+  assert.equal(ui.fs, false);
+  assert.equal(ui.nativeFs, false);
+});
+
 uiTest('video surface double-tap does not toggle fullscreen', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed');

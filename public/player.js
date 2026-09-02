@@ -176,6 +176,12 @@ export function mountPlayer(root, { file, next, onNext }) {
     container.classList.remove('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
+    // Hidden bar has pointer-events:none but would keep focus, so Space
+    // would activate the off-screen fullscreen button instead of pause.
+    const active = document.activeElement;
+    if (active && bar.contains(active) && typeof active.blur === 'function') {
+      active.blur();
+    }
   };
   const showBar = () => {
     container.classList.add('controls-visible');
@@ -523,8 +529,21 @@ export function mountPlayer(root, { file, next, onNext }) {
   container.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'mouse') showBar();
   });
-  bar.addEventListener('pointerdown', () => showBar());
+  const barActivePointers = new Set();
+  bar.addEventListener('pointerdown', (e) => {
+    barActivePointers.add(e.pointerId);
+    showBar();
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (barActivePointers.has(e.pointerId) || e.buttons) showBar();
+  });
+  const onBarPointerEnd = (e) => {
+    barActivePointers.delete(e.pointerId);
+  };
+  bar.addEventListener('pointerup', onBarPointerEnd);
+  bar.addEventListener('pointercancel', onBarPointerEnd);
   bar.addEventListener('focusin', () => showBar());
+  bar.addEventListener('keydown', () => showBar());
 
   // --- touch zones: pointerdown/up, not click ---
   function bindThird(node, dir) {
