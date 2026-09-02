@@ -1,6 +1,10 @@
 /* Sanem - neon dark theme + responsive breakpoints (PRD §11.4).
    Layout uses clamp()/minmax(), no fixed widths, single stylesheet. */
 
+:root {
+  --sanem-accent: #00E5FF;
+}
+
 :root[data-theme='dark'] {
   --bg: #0b0d17;
   --bg-elevated: #131629;
@@ -194,6 +198,7 @@ button[type='submit'] {
   padding: 0;
   font-size: 1.4rem;
   line-height: 1;
+  color: var(--sanem-accent);
   background: transparent;
   border-color: transparent;
 }
@@ -699,11 +704,14 @@ html.player-fs body {
   justify-content: center;
   font-size: clamp(72px, 18vmin, 128px);
   line-height: 1;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--sanem-accent);
   background: transparent;
   pointer-events: none;
   z-index: 3;
-  text-shadow: 0 4px 28px rgba(0, 0, 0, 0.55);
+  text-shadow:
+    0 0 10px var(--sanem-accent),
+    0 0 28px color-mix(in srgb, var(--sanem-accent) 70%, transparent),
+    0 4px 24px rgba(0, 0, 0, 0.7);
 }
 
 .ctl {
@@ -744,7 +752,7 @@ html.player-fs body {
   flex: 1 1 0;
   height: 6px;
   min-width: 32px;
-  background: rgba(255, 255, 255, 0.2);
+  background: color-mix(in srgb, var(--sanem-accent) 28%, rgba(255, 255, 255, 0.1));
   border-radius: 999px;
   position: relative;
   cursor: pointer;
@@ -769,8 +777,8 @@ html.player-fs body {
 }
 
 .progress-played {
-  background: var(--accent);
-  box-shadow: var(--glow) var(--accent);
+  background: var(--sanem-accent);
+  box-shadow: 0 0 8px var(--sanem-accent), 0 0 18px var(--sanem-accent);
 }
 
 .progress-handle {
