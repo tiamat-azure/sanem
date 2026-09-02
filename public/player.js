@@ -368,8 +368,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   // previous session cannot adopt leftover native or abort a new wait.
   let fsGen = 0;
   let leftoverNative = false;
+  let leftoverWaitTimer = 0;
   const NATIVE_FS_GRACE_MS = 400;
   const OVERLAY_SILENT_WATCH_MS = 1600;
+  const LEFTOVER_NATIVE_WAIT_MS = 400;
 
   const stopNativeGrace = () => {
     waitingNativeFs = false;
@@ -377,7 +379,14 @@ export function mountPlayer(root, { file, next, onNext }) {
       clearTimeout(nativeGraceTimer);
       nativeGraceTimer = 0;
     }
+    stopLeftoverWait();
     stopNativeSample();
+  };
+  const stopLeftoverWait = () => {
+    if (leftoverWaitTimer) {
+      clearTimeout(leftoverWaitTimer);
+      leftoverWaitTimer = 0;
+    }
   };
   const stopNativeWatch = () => {
     if (nativeWatchTimer) {
@@ -509,9 +518,12 @@ export function mountPlayer(root, { file, next, onNext }) {
   // often land a tick later. rAF samples until the 400ms grace, then overlay.
   // Overlay then has a bounded dismiss sampler for silent late native (no adopt).
   const resumeNativeAfterLeftover = () => {
+    if (!leftoverNative) return;
     leftoverNative = false;
     nativeElOnRequest = false;
+    stopLeftoverWait();
     if (!wantFull || !waitingNativeFs) return;
+    if (container.classList.contains('is-fake-fullscreen')) return;
     // Previous requestFullscreen often no-ops while leftover native is still
     // assigned. Re-request and restart grace after that exit actually lands.
     armNativeWait();
@@ -570,6 +582,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeGrace();
     stopNativeWatch();
     fsGen += 1;
+    const gen = fsGen;
     leftoverNative = nativeFsEl() === container;
     wantFull = true;
     sawNativeFs = false;
@@ -581,8 +594,15 @@ export function mountPlayer(root, { file, next, onNext }) {
     btnFull.setAttribute('aria-label', 'Plein écran');
     waitingNativeFs = true;
     if (leftoverNative) {
-      // Do not request while leftover native is still assigned (often a no-op)
-      // and do not start grace — leftover leave will arm a fresh wait.
+      // Do not request while leftover native is still assigned (often a no-op).
+      // Re-issue exit and bound the wait so a hung prior exit cannot stall.
+      exitNativeFs().catch(() => {});
+      leftoverWaitTimer = setTimeout(() => {
+        leftoverWaitTimer = 0;
+        if (gen !== fsGen || !leftoverNative) return;
+        applyOverlayFallback();
+        leftoverNative = false;
+      }, LEFTOVER_NATIVE_WAIT_MS);
       pumpNativeSample();
       return;
     }
@@ -657,17 +677,23 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   bar.addEventListener('pointerdown', (e) => {
     barActivePointers.add(e.pointerId);
+    try {
+      bar.setPointerCapture(e.pointerId);
+    } catch {
+      // Capture needs a trusted pointer; document listeners still clear the id.
+    }
     showBar();
   });
   bar.addEventListener('pointermove', (e) => {
     if (barActivePointers.has(e.pointerId) || e.buttons) showBar();
   });
   const onBarPointerEnd = (e) => {
+    if (!barActivePointers.has(e.pointerId)) return;
     barActivePointers.delete(e.pointerId);
     showBar();
   };
-  bar.addEventListener('pointerup', onBarPointerEnd);
-  bar.addEventListener('pointercancel', onBarPointerEnd);
+  document.addEventListener('pointerup', onBarPointerEnd);
+  document.addEventListener('pointercancel', onBarPointerEnd);
   bar.addEventListener('pointerenter', (e) => {
     if (e.pointerType === 'touch') return;
     pointerInBar = true;
@@ -729,7 +755,9 @@ export function mountPlayer(root, { file, next, onNext }) {
         clearInterval(holdInterval);
         holdInterval = null;
         holdSeeking = false;
-        video.play();
+        Promise.resolve(video.play())
+          .catch(() => {})
+          .finally(() => render());
         return;
       }
       if (heldMs >= 500) return;
@@ -763,7 +791,9 @@ export function mountPlayer(root, { file, next, onNext }) {
         clearInterval(holdInterval);
         holdInterval = null;
         holdSeeking = false;
-        video.play();
+        Promise.resolve(video.play())
+          .catch(() => {})
+          .finally(() => render());
       }
     });
   }
@@ -811,6 +841,8 @@ export function mountPlayer(root, { file, next, onNext }) {
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('webkitfullscreenchange', onFsChange);
+    document.removeEventListener('pointerup', onBarPointerEnd);
+    document.removeEventListener('pointercancel', onBarPointerEnd);
     window.removeEventListener('orientationchange', onOrientation);
     window.removeEventListener('resize', onOrientation);
     clearTimeout(hideTimer);

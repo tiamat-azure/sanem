@@ -423,6 +423,23 @@ async function installFullscreenStub(send, behavior) {
       Element.prototype.webkitRequestFullscreen = impl;
       return;
     }
+    if (behavior === 'exit-hang') {
+      const impl = function() {
+        window.__fsRequests += 1;
+        fsEl = this;
+        queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+        return Promise.resolve();
+      };
+      const hangExit = function() {
+        window.__fsExits += 1;
+        return Promise.resolve();
+      };
+      document.exitFullscreen = hangExit;
+      document.webkitExitFullscreen = hangExit;
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     if (behavior === 'succeed-then-leave') {
       const impl = function() {
         window.__fsRequests += 1;
@@ -787,6 +804,44 @@ uiTest('hold-to-seek on a side third does not show the center play icon', async 
   assert.equal(ui.centerPlay, false, 'center play hides again once playback resumes');
 });
 
+uiTest('hold-to-seek shows center play if resume play is blocked', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-left');
+      const opts = { bubbles: true, cancelable: true, pointerId: 12, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 700));
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.play = function() {
+        this.pause();
+        return Promise.reject(Object.assign(new Error('NotAllowedError'), { name: 'NotAllowedError' }));
+      };
+      const el = document.querySelector('.touch-left');
+      const opts = { bubbles: true, cancelable: true, pointerId: 12, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+    })()`
+  );
+  await waitFor(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      const b = document.querySelector('button.center-play');
+      return Boolean(v?.paused && b && !b.hidden);
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'blocked play after hold must leave the video paused');
+  assert.equal(ui.centerPlay, true, 'named play control must reappear if hold-resume play is blocked');
+});
+
 uiTest('mouse move reveals a hidden toolbar', async (t) => {
   const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   await loopAndPlay(send);
@@ -964,6 +1019,43 @@ uiTest('a stationary finger on the control bar holds it visible', async (t) => {
   assert.equal(ui.paused, false);
 });
 
+uiTest('pointerup outside the control bar still releases the auto-hide hold', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 9,
+        pointerType: 'touch',
+      }));
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      document.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 9,
+        pointerType: 'touch',
+      }));
+    })()`
+  );
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'release outside the bar must not leak the pointer hold');
+  assert.equal(ui.paused, false);
+});
+
 uiTest('touch pointermove on the bar during a scrub keeps it visible', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
@@ -1081,7 +1173,30 @@ uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) =>
   assert.equal(ui.fakeFs, false, 'rapid re-enter must not drop to overlay');
   assert.equal(ui.fs, true);
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
-  assert.ok(ui.fsRequests >= 2, 'leftover leave must issue a new native request');
+  assert.equal(ui.fsRequests, 2, 'leftover leave must issue exactly one new native request');
+});
+
+uiTest('hung leftover native exit falls back to overlay instead of stalling', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'exit-hang');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(
+    send,
+    `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true, 'hung leftover native must not stall waitingNativeFs forever');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'after leftover overlay, toggle must be able to exit');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
 });
 
 uiTest('video surface double-tap does not toggle fullscreen', async (t) => {
