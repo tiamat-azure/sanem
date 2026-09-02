@@ -113,7 +113,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
   btnFull.textContent = '⛶';
 
-  // Play/pause lives on the center surface (Netflix-style icon), not the bar.
+  // Play/pause is the named Netflix-style center button, not a toolbar control.
   bar.append(progress, time, btnMute, volume, speed, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
@@ -222,6 +222,12 @@ export function mountPlayer(root, { file, next, onNext }) {
     else video.pause();
   };
   centerPlay.addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePlay();
+  });
+  centerPlay.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
     e.stopPropagation();
     togglePlay();
   });

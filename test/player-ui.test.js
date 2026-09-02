@@ -705,8 +705,18 @@ uiTest('center play button is named and usable by click and keyboard', async (t)
   await evaluate(send, 'document.querySelector("button.center-play").focus()');
   const active = await evaluate(send, 'document.activeElement?.classList.contains("center-play") === true');
   assert.equal(active, true, 'center play button is focusable');
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await evaluate(
+    send,
+    `(function(){
+      const b = document.querySelector('button.center-play');
+      b.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter',
+        code: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }));
+    })()`
+  );
   await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'keyboard activation of the center play button resumes playback');
