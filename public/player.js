@@ -6,6 +6,9 @@
 // browser chrome). CSS overlay + optional landscape rotate is only a
 // fallback when native rejects or is a no-op — never a first choice on
 // phones, and never applied on top of a successful native fullscreen.
+// Do not add is-fullscreen until native lands or overlay fallback applies:
+// the class sets aspect-ratio:auto; height:100% without position:fixed and
+// would collapse the player for ~400ms on no-op phones.
 
 const POS_PREFIX = 'sanem-pos:';
 const WATCHED_PREFIX = 'sanem-watched:';
@@ -336,7 +339,8 @@ export function mountPlayer(root, { file, next, onNext }) {
       return;
     }
     stopNativeGrace();
-    container.classList.add('is-fake-fullscreen');
+    container.classList.add('is-fullscreen', 'is-fake-fullscreen');
+    document.documentElement.classList.add('player-fs');
     tryLockLandscape();
     syncForcedLandscape();
   };
@@ -370,9 +374,11 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeWatch();
     wantFull = true;
     sawNativeFs = false;
-    container.classList.add('is-fullscreen');
+    // Do not add is-fullscreen yet: .is-fullscreen sets aspect-ratio:auto and
+    // height:100% without position:fixed, which collapses the player for the
+    // ~400ms grace on no-op phones. Class is applied when native lands or
+    // overlay fallback runs.
     btnFull.setAttribute('aria-label', 'Quitter le plein écran');
-    document.documentElement.classList.add('player-fs');
     waitingNativeFs = true;
     nativeGraceTimer = setTimeout(() => {
       nativeGraceTimer = 0;

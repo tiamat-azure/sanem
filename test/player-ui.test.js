@@ -403,13 +403,13 @@ async function installFullscreenStub(send, behavior) {
 
 async function clickFullscreen(send) {
   await tapSelector(send, 'button[aria-label="Plein écran"]');
-  // is-fullscreen is set synchronously; wait until native was attempted and
-  // either the overlay fallback or the native element is in place.
+  // Wait until native was attempted and either overlay fallback or native FS
+  // landed. Do not require is-fullscreen during the wait (captain decision B).
   await waitFor(
     send,
     `(function(){
       const el = document.querySelector('.player-container');
-      if (!el?.classList.contains('is-fullscreen')) return false;
+      if (!el) return false;
       if ((window.__fsRequests ?? 0) < 1) return false;
       return el.classList.contains('is-fake-fullscreen')
         || (document.fullscreenElement || document.webkitFullscreenElement) === el;
@@ -600,6 +600,7 @@ uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
   const ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
   assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fs, true, 'is-fullscreen applies after overlay fallback');
   assert.equal(ui.fakeFs, true, 'no-op native request must fall back to the CSS overlay');
   assert.equal(ui.forcedLandscape, true, 'portrait fake-fullscreen rotates onto the long edge');
   const longEdge = Math.max(ui.player.w, ui.player.h);
@@ -613,10 +614,12 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
   await new Promise((r) => setTimeout(r, 50));
   let ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.fs, true);
+  assert.equal(ui.fs, false, 'is-fullscreen must not apply during the native wait');
+  assert.equal(ui.htmlFs, false, 'player-fs must not apply during the native wait');
   assert.equal(ui.fakeFs, false, 'must not overlay before delayed webkitFullscreenElement is assigned');
   assert.equal(ui.forcedLandscape, false, 'must not rotate during the native wait');
   assert.equal(ui.nativeFs, false, 'webkit assignment is still pending');
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
   await waitFor(
     send,
     `(function(){
@@ -627,6 +630,7 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.fsRequests >= 1);
   assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fs, true, 'is-fullscreen applies after native success');
   assert.equal(ui.fakeFs, false, 'late webkit fullscreen must not keep the CSS overlay');
   assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
 });
@@ -642,6 +646,7 @@ uiTest('late native fullscreen overrides overlay fallback', async (t) => {
   let ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.fsRequests >= 1);
   assert.equal(ui.fakeFs, true, 'grace timeout applies overlay before a very late native assign');
+  assert.equal(ui.fs, true, 'is-fullscreen applies after overlay fallback');
   assert.equal(ui.nativeFs, false);
   await waitFor(
     send,
