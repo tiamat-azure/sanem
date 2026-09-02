@@ -118,7 +118,10 @@ sanem/
 └── test/
     ├── filename.test.js      # tests unitaires de sanitisation (§12)
     ├── media.test.js         # tests d'intégration de la lecture (§12)
-    └── resume.test.js        # test d'intégration reprise sur coupure (§12)
+    ├── resume.test.js        # test d'intégration reprise sur coupure (§12)
+    ├── player-ui.test.js     # E2E Chrome : overlay, hamburger, plein écran téléphone
+    └── fixtures/
+        └── clip.mp4          # fixture H.264/AAC pour player-ui.test.js
 ```
 
 ## 4. Dépendances épinglées
@@ -569,9 +572,10 @@ serveur** : `GET /` sert toujours la même page.
 1. **Lecteur** (`#/lukluk/play/:chemin`) - voir 11.3.
 
 Une fois le premier choix fait, `sanem-last-tab` est écrit et le hub ne réapparaît plus :
-les connexions suivantes ouvrent directement le dernier onglet visité. Un **dock**
-persistant Putum / Lukluk reste visible sur tous les écrans et permet la bascule en un
-clic, sans repasser par le hub.
+les connexions suivantes ouvrent directement le dernier onglet visité. Un **menu overflow**
+(icône hamburger, coin supérieur droit) remplace le dock : Putum, Lukluk, bascule
+thème clair/obscur, déconnexion. Pas de barre d'onglets basse — l'IHM reste aussi
+légère que possible, y compris en lecture.
 
 ### 11.2 Configuration Uppy imposée
 
@@ -602,16 +606,22 @@ déjà disponible.
 | Contrôle             | Comportement                                                                                                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Lire / Pause         | Bouton principal, seul élément en blanc plein de la barre. Touche <kbd>Espace</kbd>.                                                                                                  |
-| Recul / avance 10 s  | `currentTime ± 10`. Flèches gauche et droite au clavier.                                                                                                                              |
+| Recul / avance 10 s  | Pas de boutons dédiés dans la barre (redondants). `currentTime ± 10` via flèches gauche/droite et double-tap sur les tiers latéraux.                                                   |
 | Barre de progression | Positionnement. Hauteur 6 px au repos, 10 px au survol, poignée de 16 px. Un liseré clair montre le tampon chargé.                                                                    |
 | Volume               | `video.volume` + coupure du son, persisté en `localStorage`.                                                                                                                          |
 | Vitesse              | `playbackRate` de 0,75× à 2×.                                                                                                                                                         |
 | Sous-titres          | Si un `.srt` ou `.vtt` de même nom a été déposé dans le même dossier, ou si `ffprobe` a détecté une piste interne, extraite par ffmpeg.                                               |
 | Épisode suivant      | Bouton étiqueté en toutes lettres, et proposition automatique 10 s avant la fin (§10.7).                                                                                              |
-| Plein écran          | Fullscreen API **sur le conteneur**, jamais sur `<video>`, sinon la barre maison disparaît. Touches <kbd>F</kbd> et <kbd>Échap</kbd>. Sur mobile, propose le verrouillage en paysage. |
+| Plein écran          | Fullscreen API **sur le conteneur**, jamais sur `<video>`, sinon la barre maison disparaît. Touches <kbd>F</kbd> et <kbd>Échap</kbd>. Sur téléphone : si l'API ou `orientation.lock` échoue, repli CSS qui étend la vidéo sur le grand côté (paysage). |
 
-**Dimensionnement imposé** : cibles de **46 px minimum** pour les icônes de la barre (52
-px sous 640 px de large), glyphe à 24 px. Une barre à 16 px n'est pas acceptable.
+**Barre overlay : une seule ligne**, y compris sous 390 px. `flex-wrap: nowrap`. Les
+boutons ±10 s n'y figurent pas. Un clic / tap sur la surface vidéo **masque** la barre ;
+un second la **réaffiche**. Elle se masque aussi seule après 3 s d'inactivité en lecture.
+
+**Dimensionnement imposé** : cibles de **46 px minimum** pour les icônes de la barre (44
+px sous 640 px de large, pour tenir sur une ligne). Glyphe à 24 px (20 px sous 640 px).
+Une barre à 16 px n'est pas acceptable. Le bouton « Épisode suivant » reste labellisé
+(`aria-label`) et peut se compacte en icône sous 640 px pour ne pas passer à la ligne.
 
 **Zones tactiles**, dans l'esprit des lecteurs mobiles usuels :
 
@@ -622,10 +632,10 @@ px sous 640 px de large), glyphe à 24 px. Une barre à 16 px n'est pas acceptab
 - **Maintien** sur un tiers latéral : après 500 ms d'appui, défilement continu de 10 s
   toutes les 250 ms, accéléré à 30 s après 3 s d'appui. Le relâchement arrête
   immédiatement et reprend la lecture.
-- **Tiers central** : simple tap pour lire ou mettre en pause, double tap pour le plein
-  écran.
-- **Simple tap n'importe où** : affiche ou masque la barre, qui se masque seule après 3 s
-  d'inactivité.
+- **Tiers central** : simple tap pour afficher ou masquer la barre, double tap pour le
+  plein écran. Lecture / pause : bouton et touche <kbd>Espace</kbd>.
+- **Simple tap n'importe où sur la surface** : affiche ou masque la barre, qui se masque
+  aussi seule après 3 s d'inactivité en lecture.
 - Implémenté en `pointerdown` / `pointerup`, **pas** en `click`, pour capter le maintien
   et fonctionner à la souris comme au doigt. `touch-action: none` sur les zones, sinon le
   navigateur mobile interprète le maintien comme un défilement.
@@ -637,11 +647,11 @@ page utilise `clamp()` et `minmax()`, pas des largeurs fixes.
 
 | Élément         | ≥ 1024 px                     | 640 - 1023 px          | < 640 px                                         |
 | --------------- | ----------------------------- | ---------------------- | ------------------------------------------------ |
-| Navigation      | Dock dans l'en-tête           | Dock compacté          | Barre d'onglets basse fixe                       |
+| Navigation      | Menu hamburger en haut à droite | Idem                   | Idem, pas de barre d'onglets basse               |
 | Tuiles du hub   | 2 colonnes                    | 2 colonnes aplaties    | 1 colonne, empilées                              |
 | Zone de dépôt   | Grande zone + liste latérale  | Zone pleine largeur    | Bouton natif d'abord, glisser-déposer en secours |
 | Vignettes       | 168 px, 5 par rangée          | 150 px, 3,5 par rangée | 136 px, 2,2 par rangée                           |
-| Lecteur         | 16:9 encadré, barre au survol | Pleine largeur         | Plein écran, verrouillage paysage proposé        |
+| Lecteur         | 16:9 encadré, barre au survol | Pleine largeur         | Plein écran paysage (repli CSS si l'API échoue)  |
 | Cibles tactiles | ≥ 32 px                       | ≥ 44 px                | ≥ 48 px, jamais deux actions à moins de 8 px     |
 | Typographie     | 16 px de base                 | 16 px de base          | **16 px de base, jamais moins** (zoom auto iOS)  |
 
@@ -676,6 +686,10 @@ coupée en bord d'écran est **volontaire** : elle signale qu'on peut faire déf
   1. relancer l'upload avec la même URL tus ;
   1. asserter que l'offset repart de la position atteinte (**pas de 0**), que le fichier
      final est intact (comparaison de hash), et que **`tmp/` est vide**.
+- **`test/player-ui.test.js`** - E2E Chromium (binaire système, pas de dépendance npm) :
+  viewports téléphone portrait **et** paysage ; hamburger (Putum, Lukluk, thème,
+  déconnexion) ; pas de boutons ±10 s ; tap surface masque/réaffiche l'overlay ; barre
+  sur une seule ligne ; le plein écran couvre le grand côté du téléphone.
 
 Ce dernier test est le garde-fou principal du projet : il valide la seule exigence
 technique non négociable. **Il ne doit pas être affaibli, ralenti ni rendu instable par
