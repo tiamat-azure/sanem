@@ -12,8 +12,8 @@ import { config } from './config.js';
 import { authRouter, requireSession } from './auth.js';
 import { filesRouter } from './files.js';
 import { tusServer, scheduleTusExpirationCleanup } from './tus.js';
-import { scheduleTmpCleanup } from './cleanup.js';
-import { warmMediaCache, hlsRouter } from './transcode.js';
+import { scheduleCleanup, sweepTmpDir } from './cleanup.js';
+import { warmMediaCache, hlsRouter, purgeTranscodeCache } from './transcode.js';
 import { mediaRouter } from './media.js';
 import { thumbsRouter } from './thumbs.js';
 
@@ -69,7 +69,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal_error' });
 });
 
-scheduleTmpCleanup(path.join(config.dataDir, 'tmp'), config.tmpTtlHours);
+scheduleCleanup([
+  () => sweepTmpDir(path.join(config.dataDir, 'tmp'), config.tmpTtlHours),
+  () => purgeTranscodeCache(),
+]);
 scheduleTusExpirationCleanup();
 warmMediaCache().catch((err) => console.warn('[sanem] media cache warm failed', err));
 

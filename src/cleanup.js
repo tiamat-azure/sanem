@@ -60,15 +60,22 @@ export async function sweepTmpDir(tmpDir, ttlHours) {
   return removedCount;
 }
 
-export function scheduleTmpCleanup(tmpDir, ttlHours) {
-  const runSweep = () => {
-    sweepTmpDir(tmpDir, ttlHours).catch((error) => {
-      console.error('[sanem] cleanup: sweep failed', error);
-    });
+/**
+ * Runs every task once at startup then hourly, all on the SAME timer (PRD
+ * §7.2 requires the transcode purge to share the tmp/ sweep interval). The
+ * timer is unref()'d so it never blocks process shutdown.
+ */
+export function scheduleCleanup(tasks) {
+  const runAll = () => {
+    for (const task of tasks) {
+      Promise.resolve()
+        .then(task)
+        .catch((error) => console.error('[sanem] cleanup: task failed', error));
+    }
   };
 
-  runSweep();
-  const timer = setInterval(runSweep, 60 * 60 * 1000);
+  runAll();
+  const timer = setInterval(runAll, 60 * 60 * 1000);
   timer.unref();
   return timer;
 }

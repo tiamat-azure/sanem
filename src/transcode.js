@@ -244,20 +244,318 @@ export async function analyzeMedia(relPath) {
   }
 }
 
-// --- on-demand segmented HLS (§10.3) - implemented in step 6 ---
+// --- on-demand segmented HLS (§10.3) ---
+//
+// The playlist is computed up-front from ffprobe data (no encoding). Each
+// segment is produced on its first request and cached under
+// transcode/<hash>/. Seeking therefore costs one segment, not the whole
+// file. Playlist type is VOD and ends with #EXT-X-ENDLIST so the player
+// knows the full duration from the first request.
+
+const TARGET_SEGMENT_SECONDS = 6;
+
+// relativePath -> epoch ms of the last playlist/segment access. Segments of a
+// media read within the last minute are never purged (§7.2).
+const lastPlayed = new Map();
+export function markPlayed(relPath) {
+  lastPlayed.set(relPath, Date.now());
+}
+export function playedWithin(relPath, ms) {
+  const t = lastPlayed.get(relPath);
+  return t !== undefined && Date.now() - t < ms;
+}
+
+async function keyframeTimes(abs) {
+  try {
+    const { stdout } = await execFileP(
+      'ffprobe',
+      [
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-skip_frame', 'nokey',
+        '-show_entries', 'frame=pts_time',
+        '-of', 'csv=print_section=0',
+        abs,
+      ],
+      { maxBuffer: 64 * 1024 * 1024 }
+    );
+    const times = stdout
+      .split('\n')
+      .map((l) => Number.parseFloat(l))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b);
+    if (times.length === 0 || times[0] > 0.001) times.unshift(0);
+    return times;
+  } catch (err) {
+    console.warn(`[sanem] keyframe probe failed for ${path.basename(abs)}: ${err.message}`);
+    return [0];
+  }
+}
+
+// Builds the segment plan: [{ start, dur }]. Lanes 1-2 (copied video) must
+// cut on real keyframes; lane 3 (re-encode) forces regular 6s segments.
+async function buildPlan(abs, info) {
+  const duration = info.duration || 0;
+  if (!duration) return [];
+
+  if (info.lane === 3) {
+    const plan = [];
+    for (let start = 0; start < duration; start += TARGET_SEGMENT_SECONDS) {
+      plan.push({ start, dur: Math.min(TARGET_SEGMENT_SECONDS, duration - start) });
+    }
+    return plan;
+  }
+
+  const kf = await runQueued(() => keyframeTimes(abs));
+  const plan = [];
+  let segStart = 0;
+  for (const t of kf) {
+    if (t > segStart && t - segStart >= TARGET_SEGMENT_SECONDS - 0.001) {
+      plan.push({ start: segStart, dur: t - segStart });
+      segStart = t;
+    }
+  }
+  if (segStart < duration) plan.push({ start: segStart, dur: duration - segStart });
+  return plan;
+}
+
+async function loadOrBuildPlan(relPath, abs, info) {
+  const dir = cacheDirFor(relPath);
+  const planFile = path.join(dir, 'plan.json');
+  try {
+    const raw = JSON.parse(await fs.readFile(planFile, 'utf8'));
+    if (raw.mtimeMs === info.mtimeMs) return raw.plan;
+  } catch {
+    // rebuild
+  }
+  const plan = await buildPlan(abs, info);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(planFile, JSON.stringify({ mtimeMs: info.mtimeMs, plan }));
+  return plan;
+}
+
+function playlistText(plan) {
+  const target = Math.ceil(Math.max(1, ...plan.map((s) => s.dur)));
+  const lines = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:3',
+    '#EXT-X-PLAYLIST-TYPE:VOD',
+    `#EXT-X-TARGETDURATION:${target}`,
+    '#EXT-X-MEDIA-SEQUENCE:0',
+  ];
+  plan.forEach((seg, i) => {
+    lines.push(`#EXTINF:${seg.dur.toFixed(3)},`);
+    lines.push(`seg-${i}.ts`);
+  });
+  lines.push('#EXT-X-ENDLIST');
+  return lines.join('\n') + '\n';
+}
+
+function segmentArgs(abs, info, seg, tmpOut) {
+  const common = ['-nostdin', '-y', '-ss', String(seg.start), '-i', abs, '-t', String(seg.dur)];
+  if (info.lane === 3) {
+    return [
+      ...common,
+      '-map', '0:v:0', '-map', '0:a:0?',
+      '-c:v', 'libx264', '-preset', config.x264Preset, '-pix_fmt', 'yuv420p',
+      '-force_key_frames', 'expr:gte(t,0)',
+      '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
+      '-output_ts_offset', String(seg.start),
+      '-avoid_negative_ts', 'make_zero',
+      '-muxdelay', '0', '-muxpreload', '0',
+      '-f', 'mpegts', tmpOut,
+    ];
+  }
+  // Lanes 1-2: copy video; lane 2 also transcodes non-AAC audio to AAC.
+  const audio =
+    info.lane === 2
+      ? ['-c:a', 'aac', '-b:a', '160k', '-ac', '2']
+      : ['-c:a', 'copy'];
+  return [
+    ...common,
+    '-map', '0:v:0', '-map', '0:a:0?',
+    '-c:v', 'copy',
+    ...audio,
+    '-output_ts_offset', String(seg.start),
+    '-avoid_negative_ts', 'make_zero',
+    '-muxdelay', '0', '-muxpreload', '0',
+    '-f', 'mpegts', tmpOut,
+  ];
+}
+
+async function ensureSegment(relPath, abs, info, plan, index, signal) {
+  const dir = cacheDirFor(relPath);
+  const out = path.join(dir, `seg-${index}.ts`);
+  try {
+    await fs.access(out);
+    markPlayed(relPath);
+    return out;
+  } catch {
+    // needs generation
+  }
+
+  await runQueued(async () => {
+    if (signal?.aborted) throw new Error('client_disconnected');
+    // Re-check: a concurrent request may have produced it while we queued.
+    try {
+      await fs.access(out);
+      return;
+    } catch {
+      // still missing
+    }
+    await fs.mkdir(dir, { recursive: true });
+    const tmpOut = path.join(dir, `seg-${index}.${process.pid}.${Date.now()}.tmp`);
+    try {
+      await execFileP('ffmpeg', segmentArgs(abs, info, plan[index], tmpOut), {
+        signal,
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: 10 * 60 * 1000,
+      });
+      // Atomic publish: a partial segment is never served from cache (§10.4).
+      await fs.rename(tmpOut, out);
+    } catch (err) {
+      await fs.rm(tmpOut, { force: true }).catch(() => {});
+      const tail = String(err.stderr ?? err.message ?? '').slice(-800);
+      console.warn(`[sanem] ffmpeg segment ${index} failed for ${relPath}: ${tail}`);
+      throw err;
+    }
+  });
+
+  markPlayed(relPath);
+  return out;
+}
+
+async function resolveHlsMedia(splat) {
+  const parts = (Array.isArray(splat) ? splat.join('/') : String(splat ?? '')).split('/');
+  const resource = parts.pop() ?? '';
+  const relRequest = parts.join('/');
+  const { abs, relativePath, stats } = await resolveReadPath(uploadsDir, relRequest);
+  const info = getMediaInfo(relativePath, stats.mtimeMs, stats.size);
+  return { abs, relativePath, stats, info: { ...info, mtimeMs: stats.mtimeMs }, resource };
+}
 
 export const hlsRouter = Router();
 
 hlsRouter.get('/hls/*splat', requireSession, async (req, res) => {
-  const raw = req.params.splat;
-  const rel = Array.isArray(raw) ? raw.join('/') : String(raw ?? '');
+  let media;
   try {
-    await resolveReadPath(uploadsDir, rel.replace(/\/[^/]*\.(m3u8|ts)$/, ''));
+    media = await resolveHlsMedia(req.params.splat);
   } catch {
     return res.status(404).end();
   }
-  // Playlist/segment generation is added in step 6.
-  return res.status(404).end();
+  const { abs, relativePath, info, resource } = media;
+
+  if (!info.ready) {
+    // ffprobe has not classified it yet; trigger and let the client retry.
+    analyzeMedia(relativePath);
+    return res.status(503).set('Retry-After', '2').end();
+  }
+  if (info.playback !== 'hls') return res.status(404).end();
+
+  let plan;
+  try {
+    plan = await loadOrBuildPlan(relativePath, abs, info);
+  } catch {
+    return res.status(500).end();
+  }
+  if (plan.length === 0) return res.status(404).end();
+
+  if (resource === 'index.m3u8') {
+    markPlayed(relativePath);
+    res.type('application/vnd.apple.mpegurl');
+    res.set('Cache-Control', 'private, max-age=30');
+    return res.send(playlistText(plan));
+  }
+
+  const match = /^seg-(\d+)\.ts$/.exec(resource);
+  if (!match) return res.status(404).end();
+  const index = Number.parseInt(match[1], 10);
+  if (!Number.isInteger(index) || index < 0 || index >= plan.length) {
+    return res.status(404).end();
+  }
+
+  const ac = new AbortController();
+  res.on('close', () => ac.abort());
+  try {
+    const segPath = await ensureSegment(relativePath, abs, info, plan, index, ac.signal);
+    if (res.writableEnded || ac.signal.aborted) return undefined;
+    res.type('video/mp2t');
+    res.set('Cache-Control', 'private, max-age=86400');
+    return res.sendFile(segPath);
+  } catch {
+    if (!res.headersSent) return res.status(ac.signal.aborted ? 499 : 500).end();
+    return undefined;
+  }
 });
+
+/**
+ * transcode/ cache purge (§7.2): drops the whole segment set of any media
+ * whose source vanished from uploads/ or whose mtime changed, then enforces
+ * the LRU size cap. Never touches a media read within the last minute.
+ */
+export async function purgeTranscodeCache() {
+  let hashes;
+  try {
+    hashes = await fs.readdir(transcodeDir);
+  } catch {
+    return;
+  }
+
+  const entries = [];
+  for (const h of hashes) {
+    const dir = path.join(transcodeDir, h);
+    let probe;
+    try {
+      probe = JSON.parse(await fs.readFile(path.join(dir, 'probe.json'), 'utf8'));
+    } catch {
+      continue;
+    }
+    const rel = probe.relativePath;
+    let stale = false;
+    try {
+      const { stats } = await resolveReadPath(uploadsDir, rel);
+      if (stats.mtimeMs !== probe.mtimeMs || stats.size !== probe.size) stale = true;
+    } catch {
+      stale = true; // source gone
+    }
+
+    if (stale && !playedWithin(rel, 60_000)) {
+      await fs.rm(dir, { recursive: true, force: true });
+      memoryCache.delete(rel);
+      console.log(`[sanem] transcode purge: dropped stale cache for "${rel}"`);
+      continue;
+    }
+
+    // Collect segment files for the LRU pass.
+    let files;
+    try {
+      files = await fs.readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      if (!f.endsWith('.ts')) continue;
+      try {
+        const st = await fs.stat(path.join(dir, f));
+        entries.push({ rel, file: path.join(dir, f), size: st.size, atimeMs: st.atimeMs });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const cap = config.transcodeCacheGb * 1024 * 1024 * 1024;
+  let total = entries.reduce((sum, e) => sum + e.size, 0);
+  if (total <= cap) return;
+
+  entries.sort((a, b) => a.atimeMs - b.atimeMs); // least recently read first
+  for (const e of entries) {
+    if (total <= cap) break;
+    if (playedWithin(e.rel, 60_000)) continue;
+    await fs.rm(e.file, { force: true });
+    total -= e.size;
+    console.log(`[sanem] transcode purge: LRU-evicted ${path.basename(e.file)} (${e.rel})`);
+  }
+}
 
 export { transcodeDir, uploadsDir };

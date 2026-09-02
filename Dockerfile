@@ -1,5 +1,9 @@
 FROM node:22-alpine
 
+# ffmpeg also provides ffprobe. ~80 MB, the assumed cost of PRD §10 (media
+# analysis, thumbnails, on-demand HLS transcoding).
+RUN apk add --no-cache ffmpeg
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
