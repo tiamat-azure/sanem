@@ -239,6 +239,15 @@ export async function analyzeMedia(relPath) {
         // thumbs.js not present yet (added in step 6)
       }
     }
+
+    // Pre-build the HLS segment plan now (post-upload, non-blocking) so the
+    // keyframe scan of a 1.5 GB file - up to ~20 s - does not happen while the
+    // user waits on the first playlist request.
+    if (info.playback === 'hls') {
+      loadOrBuildPlan(relPath, abs, { ...info, mtimeMs: stats.mtimeMs }).catch((err) =>
+        console.warn(`[sanem] plan pre-build failed for ${relPath}: ${err.message}`)
+      );
+    }
   } finally {
     inFlight.delete(relPath);
   }
@@ -353,6 +362,17 @@ function playlistText(plan) {
 
 function segmentArgs(abs, info, seg, tmpOut) {
   const common = ['-nostdin', '-y', '-ss', String(seg.start), '-i', abs, '-t', String(seg.dur)];
+  // Keep timestamps continuous across independently-produced segments: shift
+  // each segment's timeline to its playlist position and DO NOT zero it
+  // (`-avoid_negative_ts make_zero` would collapse every segment to PTS 0,
+  // which breaks seeking and native HLS). Verified against a real 1080p
+  // H.264/AAC .mkv, lanes 1-3.
+  const timing = [
+    '-output_ts_offset', String(seg.start),
+    '-avoid_negative_ts', 'disabled',
+    '-mpegts_flags', '+initial_discontinuity',
+    '-muxdelay', '0', '-muxpreload', '0',
+  ];
   if (info.lane === 3) {
     return [
       ...common,
@@ -360,9 +380,7 @@ function segmentArgs(abs, info, seg, tmpOut) {
       '-c:v', 'libx264', '-preset', config.x264Preset, '-pix_fmt', 'yuv420p',
       '-force_key_frames', 'expr:gte(t,0)',
       '-c:a', 'aac', '-b:a', '160k', '-ac', '2',
-      '-output_ts_offset', String(seg.start),
-      '-avoid_negative_ts', 'make_zero',
-      '-muxdelay', '0', '-muxpreload', '0',
+      ...timing,
       '-f', 'mpegts', tmpOut,
     ];
   }
@@ -376,9 +394,7 @@ function segmentArgs(abs, info, seg, tmpOut) {
     '-map', '0:v:0', '-map', '0:a:0?',
     '-c:v', 'copy',
     ...audio,
-    '-output_ts_offset', String(seg.start),
-    '-avoid_negative_ts', 'make_zero',
-    '-muxdelay', '0', '-muxpreload', '0',
+    ...timing,
     '-f', 'mpegts', tmpOut,
   ];
 }

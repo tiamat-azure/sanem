@@ -97,13 +97,15 @@ function thumbEl(file) {
   wrap.className = 'thumb';
   wrap.style.backgroundImage = gradientFor(file.path);
   if (file.kind === 'video') {
-    const img = new Image();
+    const img = document.createElement('img');
+    img.className = 'thumb-img';
     img.loading = 'lazy';
     img.alt = '';
+    img.decoding = 'async';
+    img.addEventListener('load', () => img.classList.add('is-loaded'));
+    img.addEventListener('error', () => img.remove());
     img.src = `/api/thumbs/${mediaPath(file.path)}`;
-    img.addEventListener('load', () => {
-      wrap.style.backgroundImage = `url("${img.src}")`;
-    });
+    wrap.appendChild(img);
   }
   const pos = loadPosition(file.path);
   if (pos > 0 && file.duration) {

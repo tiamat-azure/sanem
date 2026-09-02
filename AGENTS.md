@@ -92,7 +92,17 @@ One line each; full rationale in PRD §13.
 - No media route may block the tus response on `ffprobe`; no access token in a media URL.
 - HLS segment boundaries on copy paths (1-2) must land on real keyframes, not fixed
   intervals, or the copied stream is unplayable.
+- HLS segment ffmpeg flags:
+  `-output_ts_offset <start> -avoid_negative_ts disabled -mpegts_flags +initial_discontinuity`.
+  `-avoid_negative_ts make_zero` collapses every segment to PTS 0 and breaks seeking /
+  native HLS (verified against a real 1080p H.264/AAC .mkv).
+- Thumbnail ffmpeg needs an explicit `-f image2`: the temp output name ends in `.tmp` so
+  the muxer cannot be inferred.
+- The HLS segment plan (keyframe scan, up to ~20 s for a 1.5 GB file) is pre-built by
+  `analyzeMedia` post-upload, non-blocking - never on the first playlist request.
 - Fullscreen goes on the player container, never `<video>`, or the custom bar vanishes.
+- Global `[hidden] { display: none !important }` is required: component rules set
+  `display: flex/grid` and would otherwise beat the bare `hidden` attribute.
 - At most `SANEM_FFMPEG_CONCURRENCY` (default 1) ffmpeg processes: uploads come first.
 
 ## Configuration

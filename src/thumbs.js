@@ -66,6 +66,10 @@ export async function extractThumbnail(relPath, durationSeconds) {
             'scale=480:-2',
             '-q:v',
             '4',
+            // Force the muxer: the temp output name ends in .tmp, so ffmpeg
+            // cannot infer the format from the extension.
+            '-f',
+            'image2',
             '-y',
             tmpOut,
           ],
