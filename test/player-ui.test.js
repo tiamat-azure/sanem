@@ -1069,7 +1069,11 @@ uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) =>
     send,
     `(function(){
       const el = document.querySelector('.player-container');
-      return (document.fullscreenElement || document.webkitFullscreenElement) === el;
+      const native = (document.fullscreenElement || document.webkitFullscreenElement) === el;
+      return native
+        && el.classList.contains('is-fullscreen')
+        && !el.classList.contains('is-fake-fullscreen')
+        && (window.__fsRequests ?? 0) >= 2;
     })()`
   );
   ui = await evaluate(send, SNAPSHOT);
