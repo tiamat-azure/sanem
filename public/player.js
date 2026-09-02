@@ -1,0 +1,396 @@
+// Custom video player (PRD §11.3): native <video>, home-made control bar,
+// mobile-style touch zones, keyboard shortcuts, next-episode chaining and
+// per-browser resume positions (localStorage). Fullscreen goes on the
+// container, never on <video>, or the custom bar disappears (§13).
+
+const POS_PREFIX = 'sanem-pos:';
+const VOLUME_KEY = 'sanem-volume';
+const MUTED_KEY = 'sanem-muted';
+
+const fmtTime = (s) => {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return `${h > 0 ? h + ':' : ''}${mm}:${String(sec).padStart(2, '0')}`;
+};
+
+export function loadPosition(path) {
+  const v = Number(localStorage.getItem(POS_PREFIX + path));
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+function savePosition(path, seconds, duration) {
+  if (duration && seconds / duration > 0.95) {
+    localStorage.removeItem(POS_PREFIX + path);
+  } else if (seconds > 3) {
+    localStorage.setItem(POS_PREFIX + path, String(Math.floor(seconds)));
+  }
+}
+export function clearPosition(path) {
+  localStorage.removeItem(POS_PREFIX + path);
+}
+
+function el(tag, cls, attrs = {}) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  return node;
+}
+
+/**
+ * Mounts a player into `root`. Returns { destroy }.
+ * @param {object} opts
+ * @param {object} opts.file    - the media item ({ path, name, playback, duration, ... }).
+ * @param {function} opts.onNext - called with the next file, or null at the end of a series.
+ * @param {object|null} opts.next - the next episode file (same folder), or null.
+ */
+export function mountPlayer(root, { file, next, onNext }) {
+  root.textContent = '';
+
+  const container = el('div', 'player-container');
+  const video = el('video', 'player-video', { playsinline: '', preload: 'metadata' });
+  const touch = el('div', 'player-touch');
+  const thirdL = el('div', 'touch-third touch-left');
+  const thirdC = el('div', 'touch-third touch-center');
+  const thirdR = el('div', 'touch-third touch-right');
+  touch.append(thirdL, thirdC, thirdR);
+  const seekHint = el('div', 'seek-hint', { hidden: '' });
+
+  const bar = el('div', 'control-bar');
+  const btnPlay = el('button', 'ctl ctl-play', { type: 'button', 'aria-label': 'Lire' });
+  btnPlay.textContent = '▶';
+  const btnBack10 = el('button', 'ctl', { type: 'button', 'aria-label': 'Reculer de 10 secondes' });
+  btnBack10.textContent = '⟲10';
+  const btnFwd10 = el('button', 'ctl', { type: 'button', 'aria-label': 'Avancer de 10 secondes' });
+  btnFwd10.textContent = '10⟳';
+
+  const progress = el('div', 'progress', { role: 'slider', 'aria-label': 'Progression', tabindex: '0' });
+  const progBuffer = el('div', 'progress-buffer');
+  const progPlayed = el('div', 'progress-played');
+  const progHandle = el('div', 'progress-handle');
+  progress.append(progBuffer, progPlayed, progHandle);
+
+  const time = el('span', 'time-display');
+  time.textContent = '0:00 / 0:00';
+
+  const btnMute = el('button', 'ctl', { type: 'button', 'aria-label': 'Couper le son' });
+  btnMute.textContent = '🔊';
+  const volume = el('input', 'volume', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume' });
+
+  const speed = el('select', 'ctl speed', { 'aria-label': 'Vitesse de lecture' });
+  for (const r of [0.75, 1, 1.25, 1.5, 1.75, 2]) {
+    const o = document.createElement('option');
+    o.value = String(r);
+    o.textContent = `${r}×`;
+    if (r === 1) o.selected = true;
+    speed.appendChild(o);
+  }
+
+  const btnNext = el('button', 'ctl ctl-next', { type: 'button' });
+  btnNext.textContent = 'Épisode suivant';
+  btnNext.hidden = !next;
+
+  const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
+  btnFull.textContent = '⛶';
+
+  bar.append(btnPlay, btnBack10, btnFwd10, progress, time, btnMute, volume, speed, btnNext, btnFull);
+
+  const nextOverlay = el('div', 'next-overlay', { hidden: '' });
+
+  container.append(video, touch, seekHint, nextOverlay, bar);
+  root.appendChild(container);
+
+  // --- source wiring ---
+  let hls = null;
+  const mediaUrl = `/api/media/${file.path.split('/').map(encodeURIComponent).join('/')}`;
+  const hlsUrl = `/api/hls/${file.path.split('/').map(encodeURIComponent).join('/')}/index.m3u8`;
+
+  if (file.playback === 'direct') {
+    video.src = mediaUrl;
+  } else if (file.playback === 'hls') {
+    const canNative = video.canPlayType('application/vnd.apple.mpegurl');
+    if (canNative) {
+      video.src = hlsUrl;
+    } else if (window.Hls && window.Hls.isSupported()) {
+      hls = new window.Hls({ enableWorker: true });
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(video);
+    } else {
+      video.src = mediaUrl; // last resort
+    }
+  }
+
+  // --- restore volume / position ---
+  const savedVol = Number(localStorage.getItem(VOLUME_KEY));
+  video.volume = Number.isFinite(savedVol) ? Math.min(1, Math.max(0, savedVol)) : 1;
+  video.muted = localStorage.getItem(MUTED_KEY) === '1';
+  volume.value = String(video.muted ? 0 : video.volume);
+
+  const resumeAt = loadPosition(file.path);
+  video.addEventListener('loadedmetadata', () => {
+    if (resumeAt > 0 && resumeAt < (video.duration || Infinity) - 5) {
+      video.currentTime = resumeAt;
+    }
+    render();
+  });
+
+  // --- rendering ---
+  function render() {
+    const d = video.duration || file.duration || 0;
+    const c = video.currentTime || 0;
+    progPlayed.style.width = d ? `${(c / d) * 100}%` : '0%';
+    progHandle.style.left = d ? `${(c / d) * 100}%` : '0%';
+    if (video.buffered.length) {
+      const bEnd = video.buffered.end(video.buffered.length - 1);
+      progBuffer.style.width = d ? `${(bEnd / d) * 100}%` : '0%';
+    }
+    time.textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
+    btnPlay.textContent = video.paused ? '▶' : '⏸';
+    btnPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
+    btnMute.textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
+  }
+
+  video.addEventListener('timeupdate', () => {
+    render();
+    savePosition(file.path, video.currentTime, video.duration);
+    if (next && video.duration && video.duration - video.currentTime <= 10) {
+      nextOverlay.hidden = false;
+    }
+  });
+  video.addEventListener('progress', render);
+  video.addEventListener('play', render);
+  video.addEventListener('pause', render);
+  video.addEventListener('volumechange', render);
+  video.addEventListener('ended', () => {
+    clearPosition(file.path);
+    if (next) goNext();
+    else {
+      nextOverlay.hidden = false;
+      nextOverlay.classList.add('is-end');
+    }
+  });
+
+  // --- controls ---
+  const togglePlay = () => (video.paused ? video.play() : video.pause());
+  const seekBy = (delta) => {
+    const d = video.duration || file.duration || 0;
+    let t = Math.max(0, video.currentTime + delta);
+    if (d) t = Math.min(t, d);
+    video.currentTime = t;
+  };
+  const goNext = () => {
+    cleanup();
+    onNext(next || null);
+  };
+
+  btnPlay.addEventListener('click', togglePlay);
+  btnBack10.addEventListener('click', () => seekBy(-10));
+  btnFwd10.addEventListener('click', () => seekBy(10));
+  btnNext.addEventListener('click', goNext);
+
+  const nextBtnOverlay = el('button', 'ctl', { type: 'button' });
+  nextBtnOverlay.textContent = next ? 'Épisode suivant ▸' : 'Revenir à la série';
+  nextBtnOverlay.addEventListener('click', goNext);
+  nextOverlay.appendChild(nextBtnOverlay);
+
+  btnMute.addEventListener('click', () => {
+    video.muted = !video.muted;
+    localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
+  });
+  volume.addEventListener('input', () => {
+    video.volume = Number(volume.value);
+    video.muted = video.volume === 0;
+    localStorage.setItem(VOLUME_KEY, volume.value);
+    localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
+  });
+  speed.addEventListener('change', () => {
+    video.playbackRate = Number(speed.value);
+  });
+
+  // --- progress bar scrubbing ---
+  const scrubTo = (clientX) => {
+    const rect = progress.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const d = video.duration || file.duration || 0;
+    if (d) video.currentTime = ratio * d;
+  };
+  let scrubbing = false;
+  progress.addEventListener('pointerdown', (e) => {
+    scrubbing = true;
+    progress.setPointerCapture(e.pointerId);
+    scrubTo(e.clientX);
+  });
+  progress.addEventListener('pointermove', (e) => scrubbing && scrubTo(e.clientX));
+  progress.addEventListener('pointerup', (e) => {
+    scrubbing = false;
+    progress.releasePointerCapture(e.pointerId);
+  });
+  progress.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') seekBy(-10);
+    if (e.key === 'ArrowRight') seekBy(10);
+  });
+
+  // --- fullscreen (on the container) ---
+  const toggleFull = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else {
+      container.requestFullscreen?.().then(() => {
+        screen.orientation?.lock?.('landscape').catch(() => {});
+      }).catch(() => {});
+    }
+  };
+  btnFull.addEventListener('click', toggleFull);
+
+  // --- bar auto-hide ---
+  let hideTimer = null;
+  const showBar = () => {
+    container.classList.add('controls-visible');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      if (!video.paused) container.classList.remove('controls-visible');
+    }, 3000);
+  };
+  showBar();
+  container.addEventListener('pointermove', showBar);
+
+  // --- touch zones (§11.3): pointerdown/up, not click ---
+  function bindThird(node, dir) {
+    let tapCount = 0;
+    let tapTimer = null;
+    let holdTimer = null;
+    let holdInterval = null;
+    let holdStart = 0;
+    let downAt = 0;
+
+    const flushTaps = () => {
+      if (tapCount === 0) return;
+      const total = tapCount * 10 * (dir === 'left' ? -1 : 1);
+      video.currentTime = Math.min(
+        Math.max(0, video.currentTime + total),
+        video.duration || video.currentTime + total
+      );
+      tapCount = 0;
+      seekHint.hidden = true;
+    };
+
+    node.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      downAt = Date.now();
+      holdStart = Date.now();
+      holdTimer = setTimeout(() => {
+        video.pause();
+        holdInterval = setInterval(() => {
+          const held = Date.now() - holdStart;
+          const step = held > 3000 ? 30 : 10;
+          video.currentTime = Math.min(
+            Math.max(0, video.currentTime + (dir === 'left' ? -step : step)),
+            video.duration || video.currentTime + step
+          );
+        }, 250);
+      }, 500);
+    });
+
+    node.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      const heldMs = Date.now() - downAt;
+      clearTimeout(holdTimer);
+      if (holdInterval) {
+        clearInterval(holdInterval);
+        holdInterval = null;
+        video.play();
+        return;
+      }
+      if (heldMs >= 500) return;
+
+      if (dir === 'center') {
+        // single tap toggles play/pause; double tap toggles fullscreen
+        tapCount += 1;
+        clearTimeout(tapTimer);
+        tapTimer = setTimeout(() => {
+          if (tapCount >= 2) toggleFull();
+          else {
+            togglePlay();
+            showBar();
+          }
+          tapCount = 0;
+        }, 280);
+        return;
+      }
+
+      // lateral: accumulate double-taps in an 800ms window
+      tapCount += 1;
+      if (tapCount === 1) {
+        // first tap on a lateral third = toggle bar visibility
+        clearTimeout(tapTimer);
+        tapTimer = setTimeout(() => {
+          if (tapCount === 1) {
+            container.classList.toggle('controls-visible');
+          }
+          tapCount = 0;
+        }, 300);
+        return;
+      }
+      seekHint.hidden = false;
+      seekHint.textContent = `${dir === 'left' ? '−' : '+'}${(tapCount - 1) * 10}s`;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(flushTaps, 800);
+    });
+
+    node.addEventListener('pointercancel', () => {
+      clearTimeout(holdTimer);
+      if (holdInterval) {
+        clearInterval(holdInterval);
+        holdInterval = null;
+        video.play();
+      }
+    });
+  }
+  bindThird(thirdL, 'left');
+  bindThird(thirdC, 'center');
+  bindThird(thirdR, 'right');
+
+  // --- keyboard ---
+  const onKey = (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    switch (e.key) {
+      case ' ':
+        e.preventDefault();
+        togglePlay();
+        showBar();
+        break;
+      case 'ArrowLeft':
+        seekBy(-10);
+        showBar();
+        break;
+      case 'ArrowRight':
+        seekBy(10);
+        showBar();
+        break;
+      case 'f':
+      case 'F':
+        toggleFull();
+        break;
+      default:
+        break;
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  video.play().catch(() => {});
+
+  function cleanup() {
+    document.removeEventListener('keydown', onKey);
+    clearTimeout(hideTimer);
+    savePosition(file.path, video.currentTime, video.duration);
+    if (hls) {
+      hls.destroy();
+      hls = null;
+    }
+    video.removeAttribute('src');
+    video.load();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+
+  return { destroy: cleanup };
+}

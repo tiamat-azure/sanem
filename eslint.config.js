@@ -21,11 +21,21 @@ export default [
   {
     files: ['public/**/*.js'],
     languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
       globals: {
         window: 'readonly',
         document: 'readonly',
+        location: 'readonly',
+        navigator: 'readonly',
+        screen: 'readonly',
         localStorage: 'readonly',
         fetch: 'readonly',
+        Image: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
         Uppy: 'readonly',
       },
     },

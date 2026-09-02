@@ -2,44 +2,116 @@
 <html lang="fr" data-theme="dark">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sanem</title>
     <link rel="stylesheet" href="https://releases.transloadit.com/uppy/v5.2.4/uppy.min.css" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body data-max-file-gb="%%MAX_FILE_GB%%">
+    <!-- Login (shown when /api/session -> authenticated: false) -->
     <div id="login-screen" class="screen" hidden>
       <form id="login-form" class="login-card">
-        <h1>📦 Sanem</h1>
-        <p class="tagline">Dépose tes fichiers, on s'occupe du reste.</p>
+        <h1>Sanem</h1>
+        <p class="tagline">Putum &amp; Lukluk - dépose et regarde.</p>
         <label for="password">Mot de passe</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" required />
+        <input
+          type="password"
+          id="password"
+          name="password"
+          autocomplete="current-password"
+          required
+        />
         <button type="submit">Entrer</button>
         <p id="login-error" class="error-message" role="alert" hidden></p>
       </form>
     </div>
 
-    <div id="app-screen" class="screen" hidden>
+    <!-- Application shell -->
+    <div id="app" class="screen" hidden>
       <header class="app-header">
-        <h1>📦 Sanem</h1>
+        <a class="brand" href="#/">Sanem</a>
+        <nav class="dock" aria-label="Navigation principale">
+          <a class="dock-link" data-tab="putum" href="#/putum">
+            <span class="dock-icon" aria-hidden="true">📤</span>
+            <span class="dock-label">Putum</span>
+          </a>
+          <a class="dock-link" data-tab="lukluk" href="#/lukluk">
+            <span class="dock-icon" aria-hidden="true">🎬</span>
+            <span class="dock-label">Lukluk</span>
+          </a>
+        </nav>
         <div class="header-actions">
           <button id="theme-toggle" type="button" title="Changer de thème">🌓</button>
           <button id="logout-button" type="button">Déconnexion</button>
         </div>
       </header>
 
-      <main>
-        <section id="dashboard-container" aria-label="Zone d'envoi de fichiers"></section>
-
-        <section class="files-section">
-          <h2>Fichiers disponibles</h2>
-          <ul id="files-list" class="files-list"></ul>
-          <p id="files-empty" class="empty-message" hidden>Aucun fichier pour le moment.</p>
-        </section>
-      </main>
+      <main id="view" tabindex="-1"></main>
     </div>
 
+    <!-- Screen templates -->
+    <template id="tpl-hub">
+      <section class="hub">
+        <h1 class="hub-title">Que veux-tu faire&nbsp;?</h1>
+        <div class="hub-tiles">
+          <a class="hub-tile tile-putum" href="#/putum">
+            <span class="tile-icon" aria-hidden="true">📤</span>
+            <span class="tile-term">Putum</span>
+            <span class="tile-gloss">Envoyer des fichiers</span>
+          </a>
+          <a class="hub-tile tile-lukluk" href="#/lukluk">
+            <span class="tile-icon" aria-hidden="true">🎬</span>
+            <span class="tile-term">Lukluk</span>
+            <span class="tile-gloss" data-hub-count>Regarder les vidéos</span>
+          </a>
+        </div>
+      </section>
+    </template>
+
+    <template id="tpl-putum">
+      <section class="putum">
+        <h1>Putum - déposer</h1>
+        <label class="field">
+          <span>Ranger dans</span>
+          <select id="series-select"></select>
+        </label>
+        <div id="new-series-field" class="field" hidden>
+          <label for="new-series-name">Nom de la nouvelle série</label>
+          <input id="new-series-name" type="text" placeholder="Ex. Anime - Frieren" />
+        </div>
+        <section id="dashboard-container" aria-label="Zone de dépôt"></section>
+      </section>
+    </template>
+
+    <template id="tpl-lukluk">
+      <section class="lukluk">
+        <div id="featured" class="featured" hidden></div>
+        <div id="rows"></div>
+        <p id="lukluk-empty" class="empty-message" hidden>
+          Aucune vidéo pour le moment. Passe par Putum pour en déposer.
+        </p>
+      </section>
+    </template>
+
+    <template id="tpl-serie">
+      <section class="serie">
+        <a class="back-link" href="#/lukluk">← Vidéothèque</a>
+        <h1 id="serie-title"></h1>
+        <ul id="serie-episodes" class="episode-list"></ul>
+      </section>
+    </template>
+
+    <template id="tpl-player">
+      <section class="player-screen">
+        <a class="back-link" id="player-back" href="#/lukluk">← Retour</a>
+        <div id="player-warning" class="player-warning" hidden></div>
+        <div id="player-root" class="player-root"></div>
+      </section>
+    </template>
+
     <script src="https://releases.transloadit.com/uppy/v5.2.4/uppy.min.js"></script>
-    <script src="/app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"></script>
+    <script type="module" src="/player.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>
