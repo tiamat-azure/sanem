@@ -1193,7 +1193,7 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
     send,
     `document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))`
   );
-  const ui = await evaluate(send, SNAPSHOT);
+  ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, true, 'Space after hide must pause, not activate the hidden fullscreen button');
   assert.equal(ui.fsRequests, 0, 'Space must not fire the off-screen fullscreen control');
   assert.equal(ui.fs, false);

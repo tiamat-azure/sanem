@@ -716,7 +716,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   bar.addEventListener('focusin', () => showBar());
   bar.addEventListener('focusout', () => {
-    queueMicrotask(() => showBar());
+    window.queueMicrotask(() => showBar());
   });
   bar.addEventListener('keydown', () => showBar());
 
