@@ -556,9 +556,12 @@ serveur** : `GET /` sert toujours la même page.
    pourcentage, vitesse et temps restant fournis par Uppy, erreurs et tentatives de
    reprise visibles. Un état intermédiaire **« analyse en cours »** apparaît entre la fin
    du transfert et `ready: true` (§8).
-1. **Lukluk** (`#/lukluk`) - la vidéothèque. Une mise en avant du contenu le plus récent
-   ou en cours de lecture, avec un bouton Lire dominant, puis des rangées horizontales
-   défilantes : « Reprendre la lecture », « Séries », « Nouveautés », « Tout ». Chaque
+1. **Lukluk** (`#/lukluk`) - la vidéothèque. Une mise en avant de la dernière vidéo
+   visionnée mais non terminée, sinon de la première vidéo lisible dans l'ordre
+   alphabétique (§8), avec un bouton Lire dominant, puis des rangées horizontales
+   défilantes : « Reprendre la lecture », « Séries », « Nouveautés », « Tout ». Les
+   rangées « Séries », « Reprendre la lecture » et « Tout » suivent ce même ordre
+   alphabétique locale-aware et numérique ; « Nouveautés » reste triée par date. Chaque
    vignette porte le nom, une métadonnée courte, et une barre de reprise magenta si une
    position est enregistrée. Les fichiers `playback: "none"` sont listés sans bouton Lire,
    avec Télécharger seul.

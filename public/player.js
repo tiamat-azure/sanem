@@ -4,6 +4,7 @@
 // container, never on <video>, or the custom bar disappears (§13).
 
 const POS_PREFIX = 'sanem-pos:';
+const WATCHED_PREFIX = 'sanem-watched:';
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 
@@ -20,15 +21,24 @@ export function loadPosition(path) {
   const v = Number(localStorage.getItem(POS_PREFIX + path));
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
+// Epoch ms of the last playback activity on this media, or 0. Only kept while
+// the media is still in progress (cleared together with the resume position
+// once it is finished), so it doubles as a "watched but not finished" marker.
+export function loadWatchedAt(path) {
+  const v = Number(localStorage.getItem(WATCHED_PREFIX + path));
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
 function savePosition(path, seconds, duration) {
   if (duration && seconds / duration > 0.95) {
-    localStorage.removeItem(POS_PREFIX + path);
+    clearPosition(path);
   } else if (seconds > 3) {
     localStorage.setItem(POS_PREFIX + path, String(Math.floor(seconds)));
+    localStorage.setItem(WATCHED_PREFIX + path, String(Date.now()));
   }
 }
 export function clearPosition(path) {
   localStorage.removeItem(POS_PREFIX + path);
+  localStorage.removeItem(WATCHED_PREFIX + path);
 }
 
 function el(tag, cls, attrs = {}) {

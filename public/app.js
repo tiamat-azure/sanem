@@ -3,11 +3,15 @@
 // same page (PRD §11). Neon dark theme by default, light/dark toggle
 // persisted in localStorage.
 
-import { mountPlayer, loadPosition } from './player.js';
+import { mountPlayer, loadPosition, loadWatchedAt } from './player.js';
 
 const THEME_KEY = 'sanem-theme';
 const LAST_TAB_KEY = 'sanem-last-tab';
 const MAX_FILE_GB = Number(document.body.dataset.maxFileGb) || 20;
+
+// Locale-aware + numeric so "Serie 2" < "Serie 10" and S01E09 < S01E10.
+const collator = new Intl.Collator('fr', { numeric: true, sensitivity: 'base' });
+const byName = (a, b) => collator.compare(a.path, b.path);
 
 const loginScreen = document.getElementById('login-screen');
 const appScreen = document.getElementById('app');
@@ -81,7 +85,9 @@ function seriesList(files) {
     if (!map.has(f.dir)) map.set(f.dir, []);
     map.get(f.dir).push(f);
   }
-  return [...map.entries()].map(([dir, items]) => ({ dir, items }));
+  return [...map.entries()]
+    .map(([dir, items]) => ({ dir, items: [...items].sort(byName) }))
+    .sort((a, b) => collator.compare(a.dir, b.dir));
 }
 
 function nextEpisode(file, files) {
@@ -191,7 +197,7 @@ function renderPutum() {
 function renderLukluk() {
   const frag = fromTemplate('tpl-lukluk');
   view.replaceChildren(frag);
-  const files = filesCache;
+  const files = [...filesCache].sort(byName);
   const vids = files.filter((f) => f.kind === 'video' || f.playback !== 'none');
   const rows = document.getElementById('rows');
   const empty = document.getElementById('lukluk-empty');
@@ -201,10 +207,13 @@ function renderLukluk() {
     return;
   }
 
-  // Featured: most recently uploaded playable video, else most recent file.
+  // Featured: the last video watched but not finished, otherwise the first
+  // playable one in alphabetical order (else the first file).
   const byRecent = [...files].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  const inProgress = byRecent.find((f) => loadPosition(f.path) > 0 && f.playback !== 'none');
-  const featuredFile = inProgress || byRecent.find((f) => f.playback !== 'none') || byRecent[0];
+  const lastWatched = vids
+    .filter((f) => f.playback !== 'none' && loadPosition(f.path) > 0 && loadWatchedAt(f.path) > 0)
+    .sort((a, b) => loadWatchedAt(b.path) - loadWatchedAt(a.path))[0];
+  const featuredFile = lastWatched || files.find((f) => f.playback !== 'none') || files[0];
   if (featuredFile) {
     const feat = document.getElementById('featured');
     feat.hidden = false;
