@@ -387,6 +387,20 @@ async function installFullscreenStub(send, behavior) {
       Element.prototype.webkitRequestFullscreen = impl;
       return;
     }
+    if (behavior === 'brief-enter-leave') {
+      // Assign synchronously, then leave before adopt can observe the element.
+      const impl = function() {
+        window.__fsRequests += 1;
+        fsEl = this;
+        return Promise.resolve().then(() => {
+          fsEl = null;
+          queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+        });
+      };
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     const impl = function() {
       window.__fsRequests += 1;
       if (behavior === 'reject') return Promise.reject(new Error('fullscreen denied'));
@@ -445,7 +459,7 @@ async function clickFullscreen(send) {
   );
 }
 
-async function openPlayer(t, viewport, { phone = true } = {}) {
+async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH } = {}) {
   const { baseUrl } = await startServer(t);
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
@@ -458,7 +472,7 @@ async function openPlayer(t, viewport, { phone = true } = {}) {
     httpOnly: true,
     path: '/',
   });
-  await send('Page.navigate', { url: `${baseUrl}/#/lukluk/play/${encodeURIComponent(PLAY_PATH)}` });
+  await send('Page.navigate', { url: `${baseUrl}/#/lukluk/play/${encodeURIComponent(playPath)}` });
   await waitFor(send, 'Boolean(document.querySelector(".player-container"))');
   await waitFor(send, 'Boolean(document.querySelector(".control-bar"))');
   return { send };
@@ -477,6 +491,10 @@ const SNAPSHOT = `({
   centerPlay: (() => {
     const el = document.querySelector('.center-play');
     return Boolean(el) && !el.hidden;
+  })(),
+  endOverlay: (() => {
+    const el = document.querySelector('.next-overlay');
+    return Boolean(el) && !el.hidden && el.classList.contains('is-end');
   })(),
   paused: document.querySelector('video')?.paused ?? null,
   fs: document.querySelector('.player-container')?.classList.contains('is-fullscreen') ?? false,
@@ -806,6 +824,59 @@ uiTest('system leave during grace does not apply overlay fallback', async (t) =>
   assert.equal(ui.forcedLandscape, false);
   assert.equal(ui.htmlFs, false);
   assert.equal(ui.fsLabel, 'Plein écran');
+});
+
+uiTest('brief native enter then leave during wait does not apply overlay', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'brief-enter-leave');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  await new Promise((r) => setTimeout(r, 450));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fs, false, 'must not stay in is-fullscreen after a leave during wait');
+  assert.equal(ui.fakeFs, false, 'leave during wait must not apply overlay after grace');
+  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.fsLabel, 'Plein écran');
+});
+
+uiTest('center tap does not play while the series-end overlay is showing', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false }, { playPath: 'Serie/e02.mp4' });
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.muted = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = Math.max(0, v.duration - 0.05);
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && el.classList.contains('is-end');
+    })()`
+  );
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.endOverlay, true, 'last episode must show the series-end overlay');
+  assert.equal(ui.paused, true);
+  assert.equal(ui.centerPlay, false, 'center play icon stays hidden behind the end overlay');
+
+  await tapVideoCenter(send);
+  await new Promise((r) => setTimeout(r, 350));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'center tap must not call play while is-end is showing');
+  assert.equal(ui.endOverlay, true, 'end overlay must stay up; tap is not replay');
+  assert.equal(ui.centerPlay, false);
 });
 
 uiTest('narrow desktop window still tries native fullscreen', async (t) => {

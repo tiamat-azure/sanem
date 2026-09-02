@@ -209,7 +209,12 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
 
   // --- controls ---
-  const togglePlay = () => (video.paused ? video.play() : video.pause());
+  const atSeriesEnd = () => !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
+  const togglePlay = () => {
+    if (atSeriesEnd()) return;
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+  };
   const seekBy = (delta) => {
     const d = video.duration || file.duration || 0;
     let t = Math.max(0, video.currentTime + delta);
@@ -301,6 +306,10 @@ export function mountPlayer(root, { file, next, onNext }) {
   let wantFull = false;
   let waitingNativeFs = false;
   let sawNativeFs = false;
+  // True if fullscreenElement was already the container when requestFullscreen
+  // returned. Distinguishes a short-lived native enter (then leave) from empty
+  // prefixed events that fire before webkit assigns the element.
+  let nativeElOnRequest = false;
   let nativeGraceTimer = 0;
   let nativeWatchTimer = 0;
 
@@ -378,6 +387,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   const exitFull = () => {
     wantFull = false;
     sawNativeFs = false;
+    nativeElOnRequest = false;
     stopNativeGrace();
     stopNativeWatch();
     container.classList.remove('is-fullscreen', 'is-fake-fullscreen', 'is-forced-landscape');
@@ -395,6 +405,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeWatch();
     wantFull = true;
     sawNativeFs = false;
+    nativeElOnRequest = false;
     // Do not add is-fullscreen yet: .is-fullscreen sets aspect-ratio:auto and
     // height:100% without position:fixed, which collapses the player for the
     // ~400ms grace on no-op phones. Class is applied when native lands or
@@ -414,8 +425,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     requestNativeFs(container)
       .then(() => {
         if (nativeFsEl() === container) adoptNativeSuccess();
+        else if (waitingNativeFs && nativeElOnRequest && !sawNativeFs) exitFull();
       })
       .catch(() => applyOverlayFallback());
+    nativeElOnRequest = nativeFsEl() === container;
   };
   const toggleFull = () => {
     if (isFull()) exitFull();
@@ -427,8 +440,17 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   const onFsChange = () => {
     if (adoptNativeSuccess()) return;
-    // Empty prefixed events: ignore only if native was never observed.
-    if (waitingNativeFs && !sawNativeFs) return;
+    // Empty prefixed events during the request (element never assigned yet)
+    // must not look like a leave. A short-lived native enter that is already
+    // gone before adopt sees it still sets nativeElOnRequest — stay exited,
+    // do not wait for the grace overlay.
+    if (waitingNativeFs && !sawNativeFs) {
+      if (nativeElOnRequest) {
+        exitFull();
+        return;
+      }
+      return;
+    }
     if (
       wantFull &&
       (sawNativeFs ||
@@ -510,8 +532,7 @@ export function mountPlayer(root, { file, next, onNext }) {
         clearTimeout(tapTimer);
         tapTimer = setTimeout(() => {
           if (tapCount >= 2) toggleFull();
-          else if (video.paused) video.play().catch(() => {});
-          else video.pause();
+          else togglePlay();
           tapCount = 0;
         }, 280);
         return;
