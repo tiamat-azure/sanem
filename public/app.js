@@ -19,19 +19,51 @@ const loginForm = document.getElementById('login-form');
 const loginError = document.getElementById('login-error');
 const passwordInput = document.getElementById('password');
 const view = document.getElementById('view');
-const dockLinks = [...document.querySelectorAll('.dock-link')];
+const menuButton = document.getElementById('app-menu-button');
+const appMenu = document.getElementById('app-menu');
+const themeToggle = document.getElementById('theme-toggle');
+const menuLinks = [...document.querySelectorAll('.app-menu-item')];
 
 let filesCache = [];
 let activePlayer = null;
 
 // --- theme ---
+function themeActionLabel(theme) {
+  return theme === 'dark' ? 'Thème clair' : 'Thème obscur';
+}
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem(THEME_KEY, theme);
+  themeToggle.textContent = themeActionLabel(theme);
 }
 applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
-document.getElementById('theme-toggle').addEventListener('click', () => {
+themeToggle.addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
+
+// --- overflow menu (Putum, Lukluk, theme, logout) ---
+function setMenuOpen(open) {
+  appMenu.hidden = !open;
+  menuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function toggleMenu() {
+  setMenuOpen(appMenu.hidden);
+}
+menuButton.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleMenu();
+});
+appMenu.addEventListener('click', (e) => {
+  // Follow a link or fire a button, then close so the chrome stays out of the way.
+  if (e.target.closest('a, button')) setMenuOpen(false);
+});
+document.addEventListener('click', (e) => {
+  if (appMenu.hidden) return;
+  if (e.target.closest('#app-menu') || e.target.closest('#app-menu-button')) return;
+  setMenuOpen(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !appMenu.hidden) setMenuOpen(false);
 });
 
 // --- helpers ---
@@ -412,13 +444,13 @@ async function route() {
       location.replace(`#/${lastTab}`);
       return;
     }
-    setDock(null);
+    setActiveTab(null);
     renderHub();
     return;
   }
 
   localStorage.setItem(LAST_TAB_KEY, tab);
-  setDock(tab);
+  setActiveTab(tab);
 
   if (parts[0] === 'putum') return renderPutum();
   if (parts[0] === 'lukluk' && parts[1] === 'serie') return renderSerie(decodeURIComponent(parts.slice(2).join('/')));
@@ -427,8 +459,8 @@ async function route() {
   location.replace('#/');
 }
 
-function setDock(tab) {
-  for (const link of dockLinks) {
+function setActiveTab(tab) {
+  for (const link of menuLinks) {
     link.classList.toggle('is-active', link.dataset.tab === tab);
   }
 }

@@ -161,13 +161,14 @@ button[type='submit'] {
   margin-top: 8px;
 }
 
-/* --- App shell + dock --- */
+/* --- App shell + overflow menu --- */
 
 .app-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  padding: 12px 24px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -182,48 +183,68 @@ button[type='submit'] {
   text-shadow: var(--glow) var(--accent-2);
 }
 
-.dock {
-  display: flex;
-  gap: 8px;
-  margin: 0 auto 0 8px;
+.header-actions {
+  position: relative;
+  margin-left: auto;
 }
 
-.dock-link {
+#app-menu-button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: transparent;
+  border-color: transparent;
+}
+
+.app-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  color: var(--text-dim);
+  box-shadow: var(--glow) rgba(124, 77, 255, 0.2);
+  z-index: 40;
+}
+
+.app-menu-item,
+.app-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: 10px;
   border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
   min-height: 44px;
 }
 
-.dock-link.is-active {
-  color: var(--text);
+.app-menu-item.is-active {
   border-color: var(--border);
-  background: var(--bg-elevated);
+  background: var(--bg-raised);
   box-shadow: var(--glow) rgba(124, 77, 255, 0.25);
 }
 
-.dock-icon {
-  font-size: 1.15rem;
-}
-
-.header-actions {
-  display: flex;
-  gap: 10px;
-}
-
-#theme-toggle {
-  background: transparent;
-  border-color: transparent;
+.app-menu-item:hover,
+.app-menu button:hover {
+  background: var(--bg-raised);
+  transform: none;
 }
 
 main {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 24px clamp(12px, 3vw, 28px) 96px;
+  padding: 24px clamp(12px, 3vw, 28px);
 }
 
 .empty-message {
@@ -534,20 +555,59 @@ main {
   width: 100%;
 }
 
+.player-screen .back-link {
+  margin-bottom: 8px;
+}
+
 .player-container {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
+  max-height: calc(100dvh - 5.5rem);
   background: #000;
   border-radius: 12px;
   overflow: hidden;
   user-select: none;
 }
 
-.player-container:fullscreen {
+.player-container:fullscreen,
+.player-container:-webkit-full-screen,
+.player-container.is-fullscreen {
   border-radius: 0;
   aspect-ratio: auto;
+  width: 100%;
   height: 100%;
+  max-height: none;
+  background: #000;
+}
+
+.player-container.is-fake-fullscreen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-height: none;
+  z-index: 10000;
+}
+
+/* Phone held in portrait: rotate so the video uses the long edge (landscape). */
+.player-container.is-forced-landscape {
+  position: fixed;
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 100dvh;
+  height: 100dvw;
+  max-width: none;
+  max-height: none;
+  transform: translate(-50%, -50%) rotate(90deg);
+  z-index: 10000;
+}
+
+html.player-fs,
+html.player-fs body {
+  overflow: hidden;
+  background: #000;
 }
 
 .player-video {
@@ -612,18 +672,23 @@ main {
   right: 0;
   bottom: 0;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  gap: 6px;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
   background: linear-gradient(0deg, rgba(6, 7, 16, 0.92), transparent);
   transform: translateY(110%);
   transition: transform 0.2s;
   z-index: 4;
-  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .player-container.controls-visible .control-bar {
   transform: translateY(0);
+  pointer-events: auto;
 }
 
 .ctl {
@@ -647,12 +712,15 @@ main {
 }
 
 .ctl-next {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .speed {
   font-size: 0.9rem;
+  flex-shrink: 0;
 }
 
 .time-display {
@@ -660,12 +728,13 @@ main {
   font-size: 0.85rem;
   color: #fff;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .progress {
-  flex: 1 1 160px;
+  flex: 1 1 0;
   height: 6px;
-  min-width: 120px;
+  min-width: 32px;
   background: rgba(255, 255, 255, 0.2);
   border-radius: 999px;
   position: relative;
@@ -707,49 +776,26 @@ main {
 
 .volume {
   width: 90px;
+  flex-shrink: 0;
   accent-color: var(--accent);
+}
+
+.ctl,
+.speed {
+  flex-shrink: 0;
 }
 
 /* --- Breakpoints --- */
 
 @media (max-width: 1023px) {
-  .dock-label {
+  .volume {
     display: none;
-  }
-  .dock-link {
-    padding: 8px 12px;
   }
 }
 
 @media (max-width: 639px) {
   .app-header {
-    flex-wrap: wrap;
-    padding: 10px 14px;
-  }
-  .dock {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    margin: 0;
-    background: var(--bg-elevated);
-    border-top: 1px solid var(--border);
-    padding: 6px calc(6px + env(safe-area-inset-left));
-    padding-bottom: calc(6px + env(safe-area-inset-bottom));
-    z-index: 30;
-  }
-  .dock-link {
-    flex: 1;
-    flex-direction: column;
-    gap: 2px;
-    justify-content: center;
-  }
-  .dock-label {
-    display: block;
-    font-size: 0.7rem;
-  }
-  main {
-    padding-bottom: 84px;
+    padding: 6px 10px;
   }
   .hub-tiles {
     grid-template-columns: minmax(0, 1fr);
@@ -757,12 +803,35 @@ main {
   .row-track {
     grid-auto-columns: 45vw;
   }
-  .ctl {
-    min-width: 52px;
-    min-height: 52px;
-  }
   .volume,
   .speed {
+    display: none;
+  }
+  .ctl {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .ctl-next {
+    font-size: 0;
+    min-width: 44px;
+    width: 44px;
+    padding: 0;
+  }
+  .ctl-next::after {
+    content: '⏭';
+    font-size: 20px;
+  }
+  .time-display {
+    font-size: 0.75rem;
+  }
+  .control-bar {
+    gap: 4px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 359px) {
+  .time-display {
     display: none;
   }
 }

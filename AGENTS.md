@@ -53,7 +53,8 @@ require them (missing binary => `playback: "none"`).
 - `src/cleanup.js` - `tmp/` safety-net sweep + `transcode/` LRU purge (PRD §7).
 - `public/` - `index.html` + `app.js` (screen router, Uppy dashboard, library) +
   `player.js` (custom controls, touch zones, next episode) + `style.css` (neon theme).
-- `test/` - `filename.test.js`, `media.test.js`, `resume.test.js` (see Tests).
+- `test/` - `filename.test.js`, `media.test.js`, `resume.test.js`, `player-ui.test.js`
+  (Chrome E2E for the player overlay and phone fullscreen).
 
 Full API table, storage layout, transcode matrix: PRD §6-10.
 
@@ -75,6 +76,9 @@ Full API table, storage layout, transcode matrix: PRD §6-10.
   `tus-js-client`, abort after 2 chunks, resume on the same URL, assert offset didn't
   reset, final hash matches, `tmp/` empty. **Main guardrail; never weaken or slow it** -
   this is why media probing is non-blocking.
+- `test/player-ui.test.js` - system Chrome via CDP: smartphone portrait + landscape
+  viewports, overlay toggle, single-row toolbar, hamburger chrome, fullscreen covers
+  the long edge. Needs `google-chrome` / Chromium on the machine; no extra npm dep.
 
 ## Known pitfalls
 
@@ -103,6 +107,8 @@ One line each; full rationale in PRD §13.
 - The HLS segment plan (keyframe scan, up to ~20 s for a 1.5 GB file) is pre-built by
   `analyzeMedia` post-upload, non-blocking - never on the first playlist request.
 - Fullscreen goes on the player container, never `<video>`, or the custom bar vanishes.
+  On phones, prefer the CSS fallback (fill + optional 90° rotate in portrait) because
+  the native API often no-ops or stays portrait.
 - Global `[hidden] { display: none !important }` is required: component rules set
   `display: flex/grid` and would otherwise beat the bare `hidden` attribute.
 - At most `SANEM_FFMPEG_CONCURRENCY` (default 1) ffmpeg processes: uploads come first.

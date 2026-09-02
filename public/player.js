@@ -1,7 +1,9 @@
 // Custom video player (PRD §11.3): native <video>, home-made control bar,
 // mobile-style touch zones, keyboard shortcuts, next-episode chaining and
 // per-browser resume positions (localStorage). Fullscreen goes on the
-// container, never on <video>, or the custom bar disappears (§13).
+// container, never on <video>, or the custom bar disappears (§13). On
+// phones the control uses a CSS fallback so the video fills the long edge
+// (landscape) even when the Fullscreen API or orientation.lock is missing.
 
 const POS_PREFIX = 'sanem-pos:';
 const WATCHED_PREFIX = 'sanem-watched:';
@@ -70,10 +72,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   const bar = el('div', 'control-bar');
   const btnPlay = el('button', 'ctl ctl-play', { type: 'button', 'aria-label': 'Lire' });
   btnPlay.textContent = '▶';
-  const btnBack10 = el('button', 'ctl', { type: 'button', 'aria-label': 'Reculer de 10 secondes' });
-  btnBack10.textContent = '⟲10';
-  const btnFwd10 = el('button', 'ctl', { type: 'button', 'aria-label': 'Avancer de 10 secondes' });
-  btnFwd10.textContent = '10⟳';
 
   const progress = el('div', 'progress', { role: 'slider', 'aria-label': 'Progression', tabindex: '0' });
   const progBuffer = el('div', 'progress-buffer');
@@ -104,7 +102,9 @@ export function mountPlayer(root, { file, next, onNext }) {
   const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
   btnFull.textContent = '⛶';
 
-  bar.append(btnPlay, btnBack10, btnFwd10, progress, time, btnMute, volume, speed, btnNext, btnFull);
+  // Skip ±10s lives on the keyboard and on the lateral touch zones — dedicated
+  // overlay buttons were redundant and forced the bar onto a second row.
+  bar.append(btnPlay, progress, time, btnMute, volume, speed, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
 
@@ -195,8 +195,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
 
   btnPlay.addEventListener('click', togglePlay);
-  btnBack10.addEventListener('click', () => seekBy(-10));
-  btnFwd10.addEventListener('click', () => seekBy(10));
   btnNext.addEventListener('click', goNext);
 
   const nextBtnOverlay = el('button', 'ctl', { type: 'button' });
@@ -241,30 +239,116 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (e.key === 'ArrowRight') seekBy(10);
   });
 
-  // --- fullscreen (on the container) ---
-  const toggleFull = () => {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else {
-      container.requestFullscreen?.().then(() => {
-        screen.orientation?.lock?.('landscape').catch(() => {});
-      }).catch(() => {});
+  // --- fullscreen (on the container, never <video>) ---
+  // Native Fullscreen API is missing or incomplete on many phones (iOS
+  // Safari in particular). Always apply a CSS fallback class, try the API
+  // and orientation.lock, and if the viewport stays portrait, rotate the
+  // player so the video is watched along the phone's long edge.
+  const nativeFsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+  const requestNativeFs = (node) => {
+    const fn = node.requestFullscreen || node.webkitRequestFullscreen;
+    if (!fn) return Promise.reject(new Error('fullscreen unsupported'));
+    try {
+      return Promise.resolve(fn.call(node));
+    } catch (err) {
+      return Promise.reject(err);
     }
   };
-  btnFull.addEventListener('click', toggleFull);
+  const exitNativeFs = () => {
+    const fn = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!fn || !nativeFsEl()) return Promise.resolve();
+    try {
+      return Promise.resolve(fn.call(document));
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  };
+  const isPortrait = () => window.matchMedia('(orientation: portrait)').matches;
+  const preferFakeFs = () =>
+    window.matchMedia('(pointer: coarse), (hover: none)').matches ||
+    window.innerWidth < 640 ||
+    window.innerHeight < 640;
+  const syncForcedLandscape = () => {
+    const on = container.classList.contains('is-fullscreen') && isPortrait();
+    container.classList.toggle('is-forced-landscape', on);
+    document.documentElement.classList.toggle('player-fs', container.classList.contains('is-fullscreen'));
+  };
+  const isFull = () => container.classList.contains('is-fullscreen') || nativeFsEl() === container;
 
-  // --- bar auto-hide ---
+  const exitFull = () => {
+    container.classList.remove('is-fullscreen', 'is-fake-fullscreen', 'is-forced-landscape');
+    document.documentElement.classList.remove('player-fs');
+    btnFull.setAttribute('aria-label', 'Plein écran');
+    exitNativeFs().catch(() => {});
+    try {
+      screen.orientation?.unlock?.();
+    } catch {
+      // unlock is optional
+    }
+  };
+  const enterFull = () => {
+    container.classList.add('is-fullscreen');
+    btnFull.setAttribute('aria-label', 'Quitter le plein écran');
+    document.documentElement.classList.add('player-fs');
+    const afterNative = () => {
+      const lock = screen.orientation?.lock?.('landscape');
+      return lock ? Promise.resolve(lock).catch(() => {}) : Promise.resolve();
+    };
+    const useFake = () => {
+      container.classList.add('is-fake-fullscreen');
+      return afterNative();
+    };
+    const native = preferFakeFs() ? Promise.reject(new Error('phone fake-fs')) : requestNativeFs(container);
+    native.then(afterNative).catch(useFake).finally(syncForcedLandscape);
+  };
+  const toggleFull = () => {
+    if (isFull()) exitFull();
+    else enterFull();
+  };
+  btnFull.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleFull();
+  });
+  const onFsChange = () => {
+    const native = nativeFsEl() === container;
+    if (!native && container.classList.contains('is-fullscreen') && !container.classList.contains('is-fake-fullscreen')) {
+      // Esc / system UI left native fullscreen: drop the CSS class too.
+      exitFull();
+      return;
+    }
+    syncForcedLandscape();
+  };
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  const onOrientation = () => syncForcedLandscape();
+  window.addEventListener('orientationchange', onOrientation);
+  window.addEventListener('resize', onOrientation);
+
+  // --- overlay toolbar: tap the surface to hide, tap again to show ---
   let hideTimer = null;
+  const hideBar = () => {
+    container.classList.remove('controls-visible');
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  };
   const showBar = () => {
     container.classList.add('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
-      if (!video.paused) container.classList.remove('controls-visible');
+      if (!video.paused) hideBar();
     }, 3000);
   };
+  const toggleBar = () => {
+    if (container.classList.contains('controls-visible')) hideBar();
+    else showBar();
+  };
   showBar();
-  container.addEventListener('pointermove', showBar);
+  container.addEventListener('pointermove', (e) => {
+    // Mouse movement refreshes an already-visible bar; it must not undo a tap-hide.
+    if (e.pointerType === 'mouse' && container.classList.contains('controls-visible')) showBar();
+  });
 
-  // --- touch zones (§11.3): pointerdown/up, not click ---
+  // --- touch zones: pointerdown/up, not click ---
   function bindThird(node, dir) {
     let tapCount = 0;
     let tapTimer = null;
@@ -288,6 +372,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       e.preventDefault();
       downAt = Date.now();
       holdStart = Date.now();
+      if (dir === 'center') return;
       holdTimer = setTimeout(() => {
         video.pause();
         holdInterval = setInterval(() => {
@@ -314,29 +399,23 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (heldMs >= 500) return;
 
       if (dir === 'center') {
-        // single tap toggles play/pause; double tap toggles fullscreen
+        // single tap toggles the overlay; double tap toggles fullscreen
         tapCount += 1;
         clearTimeout(tapTimer);
         tapTimer = setTimeout(() => {
           if (tapCount >= 2) toggleFull();
-          else {
-            togglePlay();
-            showBar();
-          }
+          else toggleBar();
           tapCount = 0;
         }, 280);
         return;
       }
 
-      // lateral: accumulate double-taps in an 800ms window
+      // lateral: first tap toggles the overlay; further taps in 800ms seek
       tapCount += 1;
       if (tapCount === 1) {
-        // first tap on a lateral third = toggle bar visibility
         clearTimeout(tapTimer);
         tapTimer = setTimeout(() => {
-          if (tapCount === 1) {
-            container.classList.toggle('controls-visible');
-          }
+          if (tapCount === 1) toggleBar();
           tapCount = 0;
         }, 300);
         return;
@@ -381,6 +460,9 @@ export function mountPlayer(root, { file, next, onNext }) {
       case 'F':
         toggleFull();
         break;
+      case 'Escape':
+        if (container.classList.contains('is-fullscreen')) exitFull();
+        break;
       default:
         break;
     }
@@ -391,6 +473,10 @@ export function mountPlayer(root, { file, next, onNext }) {
 
   function cleanup() {
     document.removeEventListener('keydown', onKey);
+    document.removeEventListener('fullscreenchange', onFsChange);
+    document.removeEventListener('webkitfullscreenchange', onFsChange);
+    window.removeEventListener('orientationchange', onOrientation);
+    window.removeEventListener('resize', onOrientation);
     clearTimeout(hideTimer);
     savePosition(file.path, video.currentTime, video.duration);
     if (hls) {
@@ -399,7 +485,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
     video.removeAttribute('src');
     video.load();
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (isFull()) exitFull();
   }
 
   return { destroy: cleanup };
