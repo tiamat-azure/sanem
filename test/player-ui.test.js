@@ -2005,10 +2005,17 @@ uiTest('cast button follows overlay chrome and sits in the video top-right', asy
   await loopAndPlay(send);
   await waitFor(
     send,
-    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    `(function(){
+      const root = document.querySelector('.player-container');
+      const el = document.querySelector('.cast-btn');
+      if (!root || !el || root.classList.contains('controls-visible')) return false;
+      const cs = getComputedStyle(el);
+      return cs.opacity === '0' && cs.pointerEvents === 'none';
+    })()`,
     3000
   );
   ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false);
   assert.equal(ui.cast.hidden, false, 'availability stays true while chrome hides');
   assert.equal(ui.cast.opacity, '0');
   assert.equal(ui.cast.pointerEvents, 'none');
