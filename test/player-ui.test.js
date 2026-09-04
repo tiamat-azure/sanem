@@ -2576,15 +2576,28 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
 test('cast src allowlist is same-origin relative /api/media or /api/hls only', () => {
   assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=1&sig=abc'), true);
   assert.equal(isAllowedCastSrc('/api/hls/Serie/e01.mp4/index.m3u8?exp=1&sig=abc'), true);
-  assert.equal(isAllowedCastSrc('https://evil.example/api/media/Serie/e01.mp4'), false);
-  assert.equal(isAllowedCastSrc('http://127.0.0.1/api/media/Serie/e01.mp4'), false);
-  assert.equal(isAllowedCastSrc('//evil.example/api/media/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('https://evil.example/api/media/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('http://127.0.0.1/api/media/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('//evil.example/api/media/Serie/e01.mp4?exp=1&sig=abc'), false);
   assert.equal(isAllowedCastSrc('/\\/evil.example/api/media/x'), false);
-  assert.equal(isAllowedCastSrc('/api/download/Serie/e01.mp4'), false);
-  assert.equal(isAllowedCastSrc('/api/thumbs/Serie/e01.mp4'), false);
-  assert.equal(isAllowedCastSrc('/files/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('/api/download/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/thumbs/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/files/Serie/e01.mp4?exp=1&sig=abc'), false);
   assert.equal(isAllowedCastSrc(''), false);
   assert.equal(isAllowedCastSrc(null), false);
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4'), false, 'missing exp+sig');
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=1'), false, 'missing sig');
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?sig=abc'), false, 'missing exp');
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=&sig=abc'), false, 'empty exp');
+  assert.equal(isAllowedCastSrc('/api/media/../etc/passwd?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/foo/../../etc/passwd?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%2e%2e/etc/passwd?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%2E%2e/secret?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%252e%252e/secret?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/./e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%2e/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media//e01.mp4?exp=1&sig=abc'), false, 'empty path segment');
+  assert.equal(isAllowedCastSrc('/api/hls/Serie/e01.mp4/%2e%2e/index.m3u8?exp=1&sig=abc'), false);
 });
 
 uiTest('hostile mint URL is not assigned and does not prompt', async (t) => {

@@ -19,12 +19,45 @@ const WATCHED_PREFIX = 'sanem-watched:';
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 const BAR_HIDE_MS = 2000;
-// Cast fling src must stay a same-origin relative path. Absolute and
-// protocol-relative URLs would let a compromised mint send the TV elsewhere.
-const CAST_SRC_ALLOW = /^\/api\/(media|hls)\//;
 
+function decodeCastSegment(seg) {
+  let cur = seg;
+  for (let i = 0; i < 4; i += 1) {
+    let next;
+    try {
+      next = decodeURIComponent(cur.replace(/\+/g, ' '));
+    } catch {
+      return null;
+    }
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return cur;
+}
+
+// Cast fling src must stay a same-origin relative /api/media|hls path with
+// exp+sig. Reject absolute, protocol-relative, `.`/`..` (including %2e),
+// empty segments, and missing query tokens.
 export function isAllowedCastSrc(url) {
-  return typeof url === 'string' && CAST_SRC_ALLOW.test(url);
+  if (typeof url !== 'string' || url.length === 0) return false;
+  if (!url.startsWith('/') || url.startsWith('//') || url.includes('\\')) return false;
+  const hashAt = url.indexOf('#');
+  const cut = hashAt === -1 ? url : url.slice(0, hashAt);
+  const qAt = cut.indexOf('?');
+  const path = qAt === -1 ? cut : cut.slice(0, qAt);
+  const query = qAt === -1 ? '' : cut.slice(qAt + 1);
+  if (!/^\/api\/(media|hls)\//.test(path)) return false;
+  const parts = path.split('/');
+  if (parts.length < 4 || parts[0] !== '') return false;
+  for (let i = 1; i < parts.length; i += 1) {
+    const raw = parts[i];
+    if (!raw) return false;
+    const decoded = decodeCastSegment(raw);
+    if (decoded == null || decoded === '' || decoded === '.' || decoded === '..') return false;
+    if (decoded.includes('/') || decoded.includes('\\')) return false;
+  }
+  const params = new URLSearchParams(query);
+  return Boolean(params.get('exp') && params.get('sig'));
 }
 
 const fmtTime = (s) => {
