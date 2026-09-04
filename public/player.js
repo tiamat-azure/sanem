@@ -1056,13 +1056,6 @@ export function mountPlayer(root, { file, next, onNext }) {
   document.addEventListener('pointercancel', onDocPointerEnd);
 
   // --- touch zones: pointerdown/up, not click ---
-  let lastCenterToggleFull = 0;
-  const centerToggleFull = () => {
-    const now = Date.now();
-    if (now - lastCenterToggleFull < CENTER_DBLCLICK_MS) return;
-    lastCenterToggleFull = now;
-    toggleFull();
-  };
   function bindThird(node, dir) {
     let tapCount = 0;
     let tapTimer = null;
@@ -1168,7 +1161,7 @@ export function mountPlayer(root, { file, next, onNext }) {
         clearTimeout(tapTimer);
         tapTimer = null;
         tapCount = 0;
-        centerToggleFull();
+        toggleFull();
         return;
       }
 
@@ -1197,8 +1190,11 @@ export function mountPlayer(root, { file, next, onNext }) {
         e.stopPropagation();
         clearTimeout(tapTimer);
         tapTimer = null;
+        // Two pointerups already toggled; a trailing mouse dblclick must not
+        // immediately exit. If only dblclick arrived, still toggle.
+        if (tapCount === 0) return;
         tapCount = 0;
-        centerToggleFull();
+        toggleFull();
       });
     }
   }
