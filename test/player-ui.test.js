@@ -571,22 +571,35 @@ function remotePlaybackStubSource(options = {}) {
       available: true,
       state: 'disconnected',
       watchReject: false,
+      watchRejectDelayMs: 0,
       promptReject: false,
       ...options,
     })};
     window.__remotePrompts = 0;
     window.__remoteWatchCalls = 0;
+    window.__remoteFakes = [];
+    window.__setRemoteAvailable = (available) => {
+      for (const remote of window.__remoteFakes) {
+        for (const cb of remote._cbs) cb(Boolean(available));
+      }
+    };
     const remotes = new WeakMap();
     class FakeRemote extends EventTarget {
       constructor() {
         super();
         this.state = opts.state;
         this._cbs = [];
+        window.__remoteFakes.push(this);
       }
       watchAvailability(cb) {
         window.__remoteWatchCalls += 1;
         if (opts.watchReject) {
-          return Promise.reject(Object.assign(new Error('NotSupportedError'), { name: 'NotSupportedError' }));
+          const err = Object.assign(new Error('NotSupportedError'), { name: 'NotSupportedError' });
+          const delay = Number(opts.watchRejectDelayMs) || 0;
+          if (delay <= 0) return Promise.reject(err);
+          return new Promise((_, reject) => {
+            setTimeout(() => reject(err), delay);
+          });
         }
         this._cbs.push(cb);
         queueMicrotask(() => cb(Boolean(opts.available)));
@@ -2086,5 +2099,71 @@ uiTest('cast button reflects connected state and does not pause playback', async
   assert.equal(ui.cast.pressed, 'false');
   assert.equal(ui.cast.casting, false);
   assert.equal(ui.paused, false);
+});
+
+uiTest('cast button hides after disconnect if devices disappeared while live', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.pressed, 'true');
+  assert.equal(ui.cast.hidden, false);
+  await evaluate(send, 'window.__setRemoteAvailable(false)');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, false, 'stay visible while still connected even if devices drop');
+  assert.equal(ui.cast.pressed, 'true');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.equal(ui.cast.hidden, true, 'disconnect must re-apply last watchAvailability (no devices)');
+});
+
+uiTest('late watchAvailability reject after destroy does not unhide a stale cast button', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { watchReject: true, watchRejectDelayMs: 400 } }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".cast-btn"))');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, true, 'button starts hidden until watchAvailability settles');
+  await evaluate(send, 'window.__oldCast = document.querySelector(".cast-btn")');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await new Promise((r) => setTimeout(r, 600));
+  const staleHidden = await evaluate(send, 'Boolean(window.__oldCast?.hidden)');
+  assert.equal(staleHidden, true, 'destroyed player must ignore a late watchAvailability reject');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.cast, 'new player still has a cast control');
 });
 

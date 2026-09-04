@@ -331,25 +331,35 @@ export function mountPlayer(root, { file, next, onNext }) {
   // Presentation API. Firefox and other UAs without `remote` hide the button.
   let remoteWatchId = null;
   let remoteWatchPending = null;
+  let lastAvailable = false;
+  let castAlive = true;
   const remote = hasRemotePrompt(video.remote) ? video.remote : null;
-  const syncCastState = () => {
-    if (!remote) return;
-    const live = remote.state === 'connected' || remote.state === 'connecting';
-    btnCast.classList.toggle('is-casting', live);
-    btnCast.setAttribute('aria-pressed', live ? 'true' : 'false');
-    if (live) btnCast.hidden = false;
-  };
-  const applyCastAvailability = (available) => {
-    if (remote && (remote.state === 'connected' || remote.state === 'connecting')) {
-      btnCast.hidden = false;
+  const isCastLive = () =>
+    Boolean(remote && (remote.state === 'connected' || remote.state === 'connecting'));
+  // One helper for statechange and availability: stay visible while live,
+  // otherwise honor the last watchAvailability result (hide when no devices).
+  const syncCastUi = () => {
+    if (!castAlive) return;
+    if (!remote) {
+      btnCast.hidden = true;
+      btnCast.classList.remove('is-casting');
+      btnCast.setAttribute('aria-pressed', 'false');
       return;
     }
-    btnCast.hidden = !available;
+    const live = isCastLive();
+    btnCast.classList.toggle('is-casting', live);
+    btnCast.setAttribute('aria-pressed', live ? 'true' : 'false');
+    btnCast.hidden = !(lastAvailable || live);
   };
-  const onRemoteState = () => syncCastState();
+  const applyCastAvailability = (available) => {
+    if (!castAlive) return;
+    lastAvailable = Boolean(available);
+    syncCastUi();
+  };
+  const onRemoteState = () => syncCastUi();
   if (remote) {
     remote.addEventListener('statechange', onRemoteState);
-    syncCastState();
+    syncCastUi();
     if (typeof remote.watchAvailability === 'function') {
       remoteWatchPending = Promise.resolve()
         .then(() => remote.watchAvailability(applyCastAvailability))
@@ -358,6 +368,7 @@ export function mountPlayer(root, { file, next, onNext }) {
           return id;
         })
         .catch(() => {
+          if (!castAlive) return;
           // UA cannot monitor devices in the background (W3C): still offer
           // prompt() so the picker can discover them on a user gesture.
           applyCastAvailability(true);
@@ -370,6 +381,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   }
   btnCast.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (!castAlive) return;
     if (!hasRemotePrompt(video.remote)) return;
     video.remote.prompt().catch(() => {});
   });
@@ -983,6 +995,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
 
   function cleanup() {
+    castAlive = false;
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('webkitfullscreenchange', onFsChange);
