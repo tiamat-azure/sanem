@@ -251,6 +251,9 @@ test('signed cast media URL works without a session cookie; bad tokens 401', asy
     headers: { Cookie: cookie },
   });
   assert.equal(minted.status, 200);
+  assert.match(minted.headers.get('cache-control') ?? '', /private/i);
+  assert.match(minted.headers.get('cache-control') ?? '', /no-store/i);
+  assert.match(minted.headers.get('vary') ?? '', /Cookie/i);
   const payload = await minted.json();
   assert.equal(typeof payload.url, 'string');
   assert.equal(typeof payload.exp, 'number');

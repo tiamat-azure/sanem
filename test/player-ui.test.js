@@ -744,6 +744,20 @@ async function openPlayer(
       })();`,
     });
   }
+  if (remotePlayback) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        window.__castUrlFetchCache = [];
+        window.fetch = function(input, init) {
+          if (String(input).includes('/api/cast-url')) {
+            window.__castUrlFetchCache.push((init && init.cache) || null);
+          }
+          return orig(input, init);
+        };
+      })();`,
+    });
+  }
   if (blockAutoplay) {
     await send('Page.addScriptToEvaluateOnNewDocument', {
       source: `(function(){
@@ -2155,6 +2169,12 @@ uiTest('cast prompt is only opened from a user gesture', async (t) => {
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true);
   await waitCastReady(send);
+  const mintCaches = await evaluate(send, 'window.__castUrlFetchCache');
+  assert.ok(Array.isArray(mintCaches) && mintCaches.length >= 1, 'mint fetch must have run');
+  assert.ok(
+    mintCaches.every((c) => c === 'no-store'),
+    `cast-url fetch must use cache: no-store, got ${JSON.stringify(mintCaches)}`
+  );
   await clickSelector(send, '.cast-btn');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.remotePrompts, 1);

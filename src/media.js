@@ -129,6 +129,8 @@ mediaRouter.get('/cast-url/*splat', requireSession, async (req, res) => {
     mediaPath: relativePath,
     durationSec: info.ready ? info.duration : null,
   });
+  res.set('Cache-Control', 'private, no-store');
+  res.set('Vary', 'Cookie');
   res.json({ url: signedCastPath(useKind, relativePath, token), exp: token.exp });
 });
 

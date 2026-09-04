@@ -199,11 +199,12 @@ export function mountPlayer(root, { file, next, onNext }) {
   let pendingPlay = false;
   const cookieSrc = video.getAttribute('src') || '';
   video.addEventListener('loadedmetadata', () => {
-    if (pendingSeek != null) {
-      const t = pendingSeek;
-      pendingSeek = null;
-      if (t > 0 && t < (video.duration || Infinity)) video.currentTime = t;
+    const fromPending = pendingSeek;
+    pendingSeek = null;
+    if (fromPending != null && fromPending > 0 && fromPending < (video.duration || Infinity)) {
+      video.currentTime = fromPending;
     } else if (!resumeApplied && resumeAt > 0 && resumeAt < (video.duration || Infinity) - 5) {
+      // pendingSeek 0 (or null) before the first resume must not skip loadPosition.
       video.currentTime = resumeAt;
     }
     resumeApplied = true;
@@ -433,7 +434,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
     const kind = cookieSrc.includes('/api/hls/') ? 'hls' : 'media';
     const pathEnc = file.path.split('/').map(encodeURIComponent).join('/');
-    return fetch(`/api/cast-url/${pathEnc}?kind=${kind}`, { credentials: 'same-origin' })
+    return fetch(`/api/cast-url/${pathEnc}?kind=${kind}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('cast-url failed'))))
       .then((body) => {
         if (!castAlive) return null;
