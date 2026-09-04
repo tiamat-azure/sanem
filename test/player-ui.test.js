@@ -578,6 +578,28 @@ async function loopAndPlay(send) {
   await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
 }
 
+/** Override media duration/time so next-up can be tested on the ~2s fixture. */
+async function fakeDurationAndTime(send, duration, currentTime) {
+  const d = Number(duration);
+  const t0 = Number(currentTime);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      let t = ${t0};
+      Object.defineProperty(v, 'duration', { configurable: true, get() { return ${d}; } });
+      Object.defineProperty(v, 'currentTime', {
+        configurable: true,
+        get() { return t; },
+        set(n) { t = n; },
+      });
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+}
+
 async function clickFullscreen(send) {
   await tapSelector(send, 'button[aria-label="Plein écran"]');
   // Wait until native was attempted and either overlay fallback or native FS
@@ -2111,9 +2133,32 @@ uiTest('center tap does not play while the series-end overlay is showing', async
   assert.equal(ui.centerPlay, false);
 });
 
+uiTest('next-episode chip stays hidden on short titles even with a next file', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'short clip must not show the chip from t=0');
+  assert.equal(ui.nextUp.isEnd, false);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = Math.max(0, (v.duration || 0) - 0.2);
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 250));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'short clip must not show the chip near its own end');
+  assert.equal(ui.nextUp.isEnd, false);
+});
+
 uiTest('next-episode chip appears near the end when a next file exists', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
+  await fakeDurationAndTime(send, 120, 105);
   await waitFor(
     send,
     `(() => {
@@ -2139,6 +2184,7 @@ uiTest('next-episode chip appears near the end when a next file exists', async (
 uiTest('next-episode chip stays clickable after the toolbar auto-hides and loads the next file', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
+  await fakeDurationAndTime(send, 120, 105);
   await waitFor(
     send,
     `(() => {
@@ -2186,23 +2232,7 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
 uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
-  await evaluate(
-    send,
-    `(function(){
-      const v = document.querySelector('video');
-      let t = v.currentTime || 0;
-      Object.defineProperty(v, 'duration', { configurable: true, get() { return 120; } });
-      Object.defineProperty(v, 'currentTime', {
-        configurable: true,
-        get() { return t; },
-        set(n) { t = n; },
-      });
-      t = 105;
-      v.dispatchEvent(new Event('timeupdate'));
-      v.dispatchEvent(new Event('seeked'));
-      return true;
-    })()`
-  );
+  await fakeDurationAndTime(send, 120, 105);
   await waitFor(
     send,
     `(() => {
@@ -2894,6 +2924,10 @@ test('next-episode prompt is only near the end and only when a next file exists'
   assert.equal(shouldShowNextEpisode(next, 100, 100), true, 'ended / remaining 0');
   assert.equal(shouldShowNextEpisode(null, 100, 99), false, 'no next episode');
   assert.equal(shouldShowNextEpisode(next, 0, 0), false, 'unknown duration');
+  assert.equal(shouldShowNextEpisode(next, 20, 19), false, 'duration equal to lead');
+  assert.equal(shouldShowNextEpisode(next, 2, 1), false, 'short title near its own end');
+  assert.equal(shouldShowNextEpisode(next, 21, 1), true, 'just longer than lead, 20s remaining');
+  assert.equal(shouldShowNextEpisode(next, 21, 0), false, 'just longer than lead, still outside window');
   assert.equal(NEXT_UP_LEAD_S, 20);
 });
 

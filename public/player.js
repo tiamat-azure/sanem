@@ -26,7 +26,7 @@ export const CENTER_DBLCLICK_MS = 300;
 
 export function shouldShowNextEpisode(next, duration, currentTime) {
   if (!next) return false;
-  if (!Number.isFinite(duration) || duration <= 0) return false;
+  if (!Number.isFinite(duration) || duration <= NEXT_UP_LEAD_S) return false;
   const t = Number.isFinite(currentTime) ? currentTime : 0;
   return duration - t <= NEXT_UP_LEAD_S;
 }
