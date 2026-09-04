@@ -187,9 +187,22 @@ export function mountPlayer(root, { file, next, onNext }) {
   volume.value = String(video.muted ? 0 : video.volume);
 
   const resumeAt = loadPosition(file.path);
+  let resumeApplied = false;
+  let pendingSeek = null;
+  let pendingPlay = false;
+  const cookieSrc = video.getAttribute('src') || '';
   video.addEventListener('loadedmetadata', () => {
-    if (resumeAt > 0 && resumeAt < (video.duration || Infinity) - 5) {
+    if (pendingSeek != null) {
+      const t = pendingSeek;
+      pendingSeek = null;
+      if (t > 0 && t < (video.duration || Infinity)) video.currentTime = t;
+    } else if (!resumeApplied && resumeAt > 0 && resumeAt < (video.duration || Infinity) - 5) {
       video.currentTime = resumeAt;
+    }
+    resumeApplied = true;
+    if (pendingPlay) {
+      pendingPlay = false;
+      video.play().catch(() => {});
     }
     render();
   });
@@ -341,6 +354,8 @@ export function mountPlayer(root, { file, next, onNext }) {
   let lastAvailable = false;
   let castAlive = true;
   let remoteCancelRequested = false;
+  let castSrcActive = false;
+  let castUrlCache = null;
   const remote = !mseHls && hasRemotePrompt(video.remote) ? video.remote : null;
   const isCastLive = () =>
     Boolean(remote && (remote.state === 'connected' || remote.state === 'connecting'));
@@ -353,6 +368,56 @@ export function mountPlayer(root, { file, next, onNext }) {
     } catch {
       // Some UAs have no cancel(); teardown must still clear src.
     }
+  };
+  const restoreCookieSrc = () => {
+    if (!castSrcActive) return;
+    castSrcActive = false;
+    if (!cookieSrc) return;
+    if ((video.getAttribute('src') || '') === cookieSrc) return;
+    pendingSeek = video.currentTime || 0;
+    pendingPlay = !video.paused;
+    video.src = cookieSrc;
+  };
+  const applySignedSrc = (url) => {
+    if (!url) return;
+    if ((video.getAttribute('src') || '') === url) {
+      castSrcActive = true;
+      return;
+    }
+    pendingSeek = video.currentTime || 0;
+    pendingPlay = !video.paused;
+    video.src = url;
+    castSrcActive = true;
+  };
+  const peekValidCastUrl = (minTtlSec = 60) => {
+    if (!castUrlCache?.url || !castUrlCache.exp) return null;
+    const now = Math.floor(Date.now() / 1000);
+    if (castUrlCache.exp - now < minTtlSec) return null;
+    return castUrlCache.url;
+  };
+  const refreshCastUrl = () => {
+    if (!castAlive || mseHls || !cookieSrc) {
+      castUrlCache = null;
+      btnCast.removeAttribute('data-cast-ready');
+      return Promise.resolve(null);
+    }
+    const kind = cookieSrc.includes('/api/hls/') ? 'hls' : 'media';
+    const pathEnc = file.path.split('/').map(encodeURIComponent).join('/');
+    return fetch(`/api/cast-url/${pathEnc}?kind=${kind}`, { credentials: 'same-origin' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('cast-url failed'))))
+      .then((body) => {
+        if (!castAlive) return null;
+        if (!body?.url || !body.exp) throw new Error('cast-url missing');
+        castUrlCache = { url: body.url, exp: Number(body.exp) };
+        btnCast.setAttribute('data-cast-ready', '1');
+        return castUrlCache.url;
+      })
+      .catch(() => {
+        if (!castAlive) return null;
+        castUrlCache = null;
+        btnCast.removeAttribute('data-cast-ready');
+        return null;
+      });
   };
   // One helper for statechange and availability: stay visible while live,
   // otherwise honor the last watchAvailability result (hide when no devices).
@@ -373,8 +438,12 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (!castAlive || mseHls) return;
     lastAvailable = Boolean(available);
     syncCastUi();
+    if (available) refreshCastUrl();
   };
-  const onRemoteState = () => syncCastUi();
+  const onRemoteState = () => {
+    syncCastUi();
+    if (!isCastLive()) restoreCookieSrc();
+  };
   if (remote) {
     remote.addEventListener('statechange', onRemoteState);
     syncCastUi();
@@ -401,6 +470,16 @@ export function mountPlayer(root, { file, next, onNext }) {
     e.stopPropagation();
     if (!castAlive || mseHls) return;
     if (!hasRemotePrompt(video.remote)) return;
+    if (isCastLive()) {
+      video.remote.prompt().catch(() => {});
+      return;
+    }
+    const signed = peekValidCastUrl();
+    if (!signed) {
+      refreshCastUrl();
+      return;
+    }
+    applySignedSrc(signed);
     video.remote.prompt().catch(() => {});
   });
 

@@ -5,15 +5,19 @@
 // resolveReadPath and answers 404 - never 403 - on any failure, so a probe
 // cannot confirm the existence of a target.
 //
-// No access token ever appears in a media URL (§8): the same-origin session
-// cookie is the only credential.
+// On-device playback uses the same-origin session cookie. Cast (Chromecast-
+// class Remote Playback) cannot send that HttpOnly cookie: GET /api/cast-url
+// (session required) mints a short-lived exp+sig query token, verified here
+// and on /api/hls as a targeted §8 exception. Download stays cookie-only.
+// No long-lived secret is ever given to the client.
 
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
-import { requireSession } from './auth.js';
+import { mintCastToken, requireSession, requireSessionOrCastSig, signedCastPath } from './auth.js';
 import { config } from './config.js';
 import { resolveReadPath } from './filename.js';
+import { getMediaInfo } from './transcode.js';
 
 const uploadsDir = path.join(config.dataDir, 'uploads');
 
@@ -109,8 +113,32 @@ async function serveFile(req, res, { attachment }) {
 
 export const mediaRouter = Router();
 
+mediaRouter.get('/cast-url/*splat', requireSession, async (req, res) => {
+  let resolved;
+  try {
+    resolved = await resolveReadPath(uploadsDir, splatPath(req));
+  } catch {
+    return res.status(404).end();
+  }
+  const kind = req.query.kind === 'hls' ? 'hls' : req.query.kind === 'media' ? 'media' : null;
+  const { relativePath, stats } = resolved;
+  const info = getMediaInfo(relativePath, stats.mtimeMs, stats.size);
+  const useKind = kind ?? (info.ready && info.playback === 'hls' ? 'hls' : 'media');
+  const token = mintCastToken({
+    kind: useKind,
+    mediaPath: relativePath,
+    durationSec: info.ready ? info.duration : null,
+  });
+  res.json({ url: signedCastPath(useKind, relativePath, token), exp: token.exp });
+});
+
+const mediaAuth = requireSessionOrCastSig((req) => ({
+  kind: 'media',
+  mediaPath: splatPath(req),
+}));
+
 for (const method of ['get', 'head']) {
-  mediaRouter[method]('/media/*splat', requireSession, (req, res) =>
+  mediaRouter[method]('/media/*splat', mediaAuth, (req, res) =>
     serveFile(req, res, { attachment: false })
   );
   mediaRouter[method]('/download/*splat', requireSession, (req, res) =>

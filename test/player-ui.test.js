@@ -653,6 +653,7 @@ async function openPlayer(
     remotePlayback,
     playback = 'direct',
     hlsMode,
+    failCastUrl = false,
   } = {}
 ) {
   const { baseUrl } = await startServer(t, { playback });
@@ -680,6 +681,23 @@ async function openPlayer(
         HTMLVideoElement.prototype.canPlayType = function(type) {
           if (/mpegurl/i.test(String(type))) return ${native ? "'maybe'" : "''"};
           return orig.call(this, type);
+        };
+      })();`,
+    });
+  }
+  if (failCastUrl) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        window.fetch = function(input, init) {
+          const url = String(input);
+          if (url.includes('/api/cast-url')) {
+            return Promise.resolve(new Response('{"error":"fail"}', {
+              status: 502,
+              headers: { 'Content-Type': 'application/json' },
+            }));
+          }
+          return orig(input, init);
         };
       })();`,
     });
@@ -771,6 +789,9 @@ const SNAPSHOT = `({
   viewport: { w: window.innerWidth, h: window.innerHeight, portrait: window.matchMedia('(orientation: portrait)').matches },
   remotePrompts: window.__remotePrompts ?? 0,
   remoteWatchCalls: window.__remoteWatchCalls ?? 0,
+  remoteCancels: window.__remoteCancels ?? 0,
+  castReady: document.querySelector('.cast-btn')?.getAttribute('data-cast-ready') ?? null,
+  videoSrc: document.querySelector('video')?.getAttribute('src') ?? '',
   menuBtn: (() => {
     const el = document.getElementById('app-menu-button');
     if (!el) return null;
@@ -1980,6 +2001,10 @@ function rectsOverlap(a, b, gap = 0) {
   );
 }
 
+async function waitCastReady(send) {
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready") === "1"');
+}
+
 uiTest('cast button is hidden when Remote Playback is unsupported', async (t) => {
   const { send } = await openPlayer(
     t,
@@ -2087,9 +2112,12 @@ uiTest('cast prompt is only opened from a user gesture', async (t) => {
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true);
+  await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.remotePrompts, 1);
+  assert.match(ui.videoSrc, /[?&]exp=/);
+  assert.match(ui.videoSrc, /[?&]sig=/);
 });
 
 uiTest('cast button reflects connected state and does not pause playback', async (t) => {
@@ -2113,7 +2141,10 @@ uiTest('cast button reflects connected state and does not pause playback', async
     })()`
   );
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.remotePrompts, 1);
   assert.equal(ui.paused, false, 'casting must not click-through to pause the surface');
@@ -2125,6 +2156,8 @@ uiTest('cast button reflects connected state and does not pause playback', async
   assert.equal(ui.remotePrompts, 2);
   assert.equal(ui.cast.pressed, 'false');
   assert.equal(ui.cast.casting, false);
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+  ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false);
 });
 
@@ -2148,6 +2181,7 @@ uiTest('cast button hides after disconnect if devices disappeared while live', a
     })()`
   );
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.cast.pressed, 'true');
@@ -2222,6 +2256,8 @@ uiTest('cast button is not offered on the hls.js MSE path', async (t) => {
   assert.equal(info.hidden, true, 'MSE/blob playback must not offer cast');
   assert.equal(info.watches, 0, 'must not watchAvailability on the hls.js path');
   assert.equal(info.prompts, 0);
+  const mseReady = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
+  assert.equal(mseReady, null, 'MSE path must not mint a cast URL');
 });
 
 uiTest('cast button is offered for native HLS src URL', async (t) => {
@@ -2231,6 +2267,7 @@ uiTest('cast button is offered for native HLS src URL', async (t) => {
     { playback: 'hls', hlsMode: 'native', remotePlayback: { available: true } }
   );
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await waitCastReady(send);
   const info = await evaluate(
     send,
     `(function(){
@@ -2270,6 +2307,7 @@ uiTest('teardown cancels an active Remote Playback session once', async (t) => {
     })()`
   );
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
   await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
   const before = await evaluate(send, 'window.__remoteCancels ?? 0');
@@ -2280,6 +2318,38 @@ uiTest('teardown cancels an active Remote Playback session once', async (t) => {
   const cancels = await evaluate(send, 'window.__remoteCancels ?? 0');
   assert.equal(cancels, 1, 'goNext/cleanup must cancel a live session once, not twice');
 });
+
+uiTest('cast prompt is skipped when signed URL mint fails', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true }, failCastUrl: true }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await new Promise((r) => setTimeout(r, 250));
+  const ready = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
+  assert.equal(ready, null);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await new Promise((r) => setTimeout(r, 200));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 0, 'must not prompt with a cookie URL when mint fails');
+  assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+});
+
+
 
 
 

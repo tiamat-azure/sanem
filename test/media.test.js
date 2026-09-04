@@ -126,3 +126,120 @@ test('the four media routes require a session cookie (401)', async (t) => {
     assert.equal(res.status, 401, `expected 401 for ${p}, got ${res.status}`);
   }
 });
+
+test('cast signer: valid token accepts, expired and wrong-id reject', async () => {
+  process.env.SANEM_PASSWORD = PASSWORD;
+  process.env.SANEM_SESSION_SECRET = SESSION_SECRET;
+  process.env.SANEM_DATA_DIR ??= os.tmpdir();
+  const { mintCastToken, verifyCastToken, castTtlSeconds, CAST_TTL_DEFAULT_SEC, CAST_TTL_MARGIN_SEC } =
+    await import('../src/auth.js');
+  const nowSec = 1_700_000_000;
+  const token = mintCastToken({
+    kind: 'media',
+    mediaPath: 'Serie/e01.mp4',
+    durationSec: 90,
+    nowSec,
+  });
+  assert.equal(token.exp, nowSec + 90 + CAST_TTL_MARGIN_SEC);
+  assert.equal(
+    verifyCastToken({
+      kind: 'media',
+      mediaPath: 'Serie/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec,
+    }),
+    true
+  );
+  assert.equal(
+    verifyCastToken({
+      kind: 'media',
+      mediaPath: 'Serie/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec: token.exp,
+    }),
+    false,
+    'expired (now >= exp) must reject'
+  );
+  assert.equal(
+    verifyCastToken({
+      kind: 'media',
+      mediaPath: 'Other/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec,
+    }),
+    false,
+    'wrong media id must reject'
+  );
+  assert.equal(
+    verifyCastToken({
+      kind: 'hls',
+      mediaPath: 'Serie/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec,
+    }),
+    false,
+    'wrong kind must reject'
+  );
+  assert.equal(castTtlSeconds(null), CAST_TTL_DEFAULT_SEC);
+  assert.equal(castTtlSeconds(10 * 3600), CAST_TTL_DEFAULT_SEC, 'TTL is capped at 6h');
+});
+
+test('signed cast media URL works without a session cookie; bad tokens 401', async (t) => {
+  const { baseUrl, dataDir } = await startServer(t);
+  const cookie = await login(baseUrl);
+  const body = crypto.randomBytes(4096);
+  await fs.writeFile(path.join(dataDir, 'uploads', 'clip.mp4'), body);
+
+  const noAuth = await fetch(`${baseUrl}/api/cast-url/clip.mp4?kind=media`);
+  assert.equal(noAuth.status, 401);
+
+  const minted = await fetch(`${baseUrl}/api/cast-url/clip.mp4?kind=media`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(minted.status, 200);
+  const payload = await minted.json();
+  assert.equal(typeof payload.url, 'string');
+  assert.equal(typeof payload.exp, 'number');
+  assert.match(payload.url, /\/api\/media\/clip\.mp4\?/);
+  assert.match(payload.url, /[?&]exp=/);
+  assert.match(payload.url, /[?&]sig=/);
+
+  const signed = await fetch(`${baseUrl}${payload.url}`);
+  assert.equal(signed.status, 200);
+  const signedBuf = Buffer.from(await signed.arrayBuffer());
+  assert.deepEqual(signedBuf, body);
+
+  const ranged = await fetch(`${baseUrl}${payload.url}`, {
+    headers: { Range: 'bytes=0-9' },
+  });
+  assert.equal(ranged.status, 206);
+  assert.equal(Buffer.from(await ranged.arrayBuffer()).length, 10);
+
+  const { mintCastToken, signedCastPath } = await import('../src/auth.js');
+  const dead = mintCastToken({
+    kind: 'media',
+    mediaPath: 'clip.mp4',
+    durationSec: 10,
+    nowSec: 1000,
+  });
+  const expiredRes = await fetch(`${baseUrl}${signedCastPath('media', 'clip.mp4', dead)}`);
+  assert.equal(expiredRes.status, 401, 'expired signature must 401');
+
+  const wrongSig = new URL(payload.url, baseUrl);
+  wrongSig.searchParams.set('sig', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  const wrongSigRes = await fetch(wrongSig);
+  assert.equal(wrongSigRes.status, 401);
+
+  const wrongPath = payload.url.replace('clip.mp4', 'other.mp4');
+  await fs.writeFile(path.join(dataDir, 'uploads', 'other.mp4'), body);
+  const wrongIdRes = await fetch(`${baseUrl}${wrongPath}`);
+  assert.equal(wrongIdRes.status, 401, 'signature bound to media id');
+
+  const download = await fetch(`${baseUrl}/api/download/clip.mp4${new URL(payload.url, baseUrl).search}`);
+  assert.equal(download.status, 401, 'download stays cookie-only');
+});
+
