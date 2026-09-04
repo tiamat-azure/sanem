@@ -1761,7 +1761,14 @@ uiTest('center play button is named and usable by click and keyboard', async (t)
   assert.equal(ui.toolbarPlay, false, 'play/pause must not live on the bottom toolbar');
 
   await clickSelector(send, 'button.center-play');
-  await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
+  await waitFor(
+    send,
+    `(() => {
+      const v = document.querySelector('video');
+      const b = document.querySelector('button.center-play');
+      return Boolean(v && !v.paused && b && b.hidden);
+    })()`
+  );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'clicking the center play button resumes playback');
   assert.equal(ui.centerPlay, false);
@@ -2148,7 +2155,7 @@ uiTest('next-episode chip stays clickable after the toolbar auto-hides and loads
   assert.equal(ui.controlsVisible, false, 'toolbar is auto-hidden');
   assert.equal(ui.nextUp.hidden, false, 'chip must remain visible without the toolbar');
   assert.equal(ui.nextUp.inert, false);
-  await tapSelector(send, '.next-up-btn');
+  await clickSelector(send, '.next-up-btn');
   await waitFor(send, 'location.hash.includes("e02")');
   const hash = await evaluate(send, 'location.hash');
   assert.match(hash, /e02/);

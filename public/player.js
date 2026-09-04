@@ -376,6 +376,8 @@ export function mountPlayer(root, { file, next, onNext }) {
     e.stopPropagation();
     togglePlay();
   });
+  centerPlay.addEventListener('pointerdown', (e) => e.stopPropagation());
+  centerPlay.addEventListener('pointerup', (e) => e.stopPropagation());
   centerPlay.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
@@ -388,7 +390,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (d) t = Math.min(t, d);
     video.currentTime = t;
   };
+  let gone = false;
   const goNext = () => {
+    if (gone) return;
+    gone = true;
     cleanup();
     onNext(next || null);
   };
@@ -1064,6 +1069,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     let holdStart = 0;
     let downAt = 0;
     let holdPointerId = null;
+    let downOnThis = false;
 
     const flushTaps = () => {
       if (tapCount === 0) return;
@@ -1112,6 +1118,7 @@ export function mountPlayer(root, { file, next, onNext }) {
 
     node.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      downOnThis = true;
       downAt = Date.now();
       holdStart = Date.now();
       if (dir === 'center') return;
@@ -1138,9 +1145,12 @@ export function mountPlayer(root, { file, next, onNext }) {
 
     node.addEventListener('pointerup', (e) => {
       e.preventDefault();
+      const fromThis = downOnThis;
+      downOnThis = false;
       const heldMs = Date.now() - downAt;
       const wasHolding = Boolean(holdInterval);
       stopHoldSeek(true);
+      if (!fromThis) return;
       if (wasHolding) return;
       if (heldMs >= 500) return;
 
@@ -1182,6 +1192,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     });
 
     node.addEventListener('pointercancel', () => {
+      downOnThis = false;
       stopHoldSeek(true);
     });
     if (dir === 'center') {
