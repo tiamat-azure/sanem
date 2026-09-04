@@ -402,9 +402,10 @@ export function mountPlayer(root, { file, next, onNext }) {
         if (castAlive && !isCastLive()) restoreCookieSrc();
       },
       () => {
-        // Many UAs never fire statechange on picker cancel; always put the
-        // cookie-gated src back if we are still mounted.
-        if (castAlive) restoreCookieSrc();
+        // Picker cancel/reject: restore only when not connecting/connected.
+        // Click-while-live also uses prompt(); a reject must not yank src
+        // off an active session.
+        if (castAlive && !isCastLive()) restoreCookieSrc();
       }
     );
   };

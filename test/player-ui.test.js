@@ -574,6 +574,7 @@ function remotePlaybackStubSource(options = {}) {
       watchReject: false,
       watchRejectDelayMs: 0,
       promptReject: false,
+      promptRejectWhenLive: false,
       promptDismiss: false,
       ...options,
     })};
@@ -616,6 +617,10 @@ function remotePlaybackStubSource(options = {}) {
         window.__remotePrompts += 1;
         if (opts.promptReject) {
           return Promise.reject(Object.assign(new Error('NotFoundError'), { name: 'NotFoundError' }));
+        }
+        if (opts.promptRejectWhenLive && (this.state === 'connected' || this.state === 'connecting')) {
+          // Picker cancel while live: reject, leave state unchanged, no statechange.
+          return Promise.reject(Object.assign(new Error('AbortError'), { name: 'AbortError' }));
         }
         if (opts.promptDismiss) {
           // Picker dismissed: promise fulfills, state stays disconnected,
@@ -2221,6 +2226,41 @@ uiTest('cast button reflects connected state and does not pause playback', async
   await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false);
+});
+
+uiTest('prompt reject while connected keeps the signed src', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true, promptRejectWhenLive: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.match(ui.videoSrc, /[?&]sig=/);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 2');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 2);
+  assert.equal(ui.cast.pressed, 'true', 'reject while live must not disconnect');
+  assert.equal(ui.cast.casting, true);
+  assert.match(ui.videoSrc, /[?&]sig=/, 'must not restore cookie src while still connected');
 });
 
 uiTest('cast button hides after disconnect if devices disappeared while live', async (t) => {
