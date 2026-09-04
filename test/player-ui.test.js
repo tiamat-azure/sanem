@@ -12,7 +12,12 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { isAllowedCastSrc } from '../public/player.js';
+import {
+  isAllowedCastSrc,
+  shouldShowNextEpisode,
+  NEXT_UP_LEAD_S,
+  CENTER_DBLCLICK_MS,
+} from '../public/player.js';
 
 const PASSWORD = 'integration-test-password';
 const SESSION_SECRET = 'integration-test-session-secret-at-least-32-chars';
@@ -521,17 +526,41 @@ async function installFullscreenStub(send, behavior) {
   await evaluate(send, script);
 }
 
-async function tapVideoCenter(send) {
+async function tapVideoCenter(send, pointerType = 'touch') {
+  const pt = JSON.stringify(pointerType);
   await evaluate(
     send,
     `(function(){
       const el = document.querySelector('.touch-center');
       if (!el) throw new Error('missing .touch-center');
-      const opts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch' };
+      const opts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: ${pt} };
       el.dispatchEvent(new PointerEvent('pointerdown', opts));
       el.dispatchEvent(new PointerEvent('pointerup', opts));
     })()`
   );
+}
+
+async function doubleTapVideoCenter(send, pointerType = 'touch') {
+  const pt = JSON.stringify(pointerType);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-center');
+      if (!el) throw new Error('missing .touch-center');
+      const opts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: ${pt} };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      if (${pt} === 'mouse') {
+        el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      }
+    })()`
+  );
+}
+
+function waitForCenterTapDelay() {
+  return new Promise((r) => setTimeout(r, CENTER_DBLCLICK_MS + 80));
 }
 
 async function loopAndPlay(send) {
@@ -547,6 +576,28 @@ async function loopAndPlay(send) {
     })()`
   );
   await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+}
+
+/** Override media duration/time so next-up can be tested on the ~2s fixture. */
+async function fakeDurationAndTime(send, duration, currentTime) {
+  const d = Number(duration);
+  const t0 = Number(currentTime);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      let t = ${t0};
+      Object.defineProperty(v, 'duration', { configurable: true, get() { return ${d}; } });
+      Object.defineProperty(v, 'currentTime', {
+        configurable: true,
+        get() { return t; },
+        set(n) { t = n; },
+      });
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
 }
 
 async function clickFullscreen(send) {
@@ -805,6 +856,32 @@ const SNAPSHOT = `({
     const el = document.querySelector('.next-overlay');
     return Boolean(el) && !el.hidden && el.classList.contains('is-end');
   })(),
+  nextUp: (() => {
+    const wrap = document.querySelector('.next-overlay');
+    const btn = wrap?.querySelector('button');
+    if (!wrap) return null;
+    const r = wrap.getBoundingClientRect();
+    const bar = document.querySelector('.control-bar');
+    const br = bar?.getBoundingClientRect();
+    const vp = { w: window.innerWidth, h: window.innerHeight };
+    return {
+      hidden: wrap.hidden,
+      isEnd: wrap.classList.contains('is-end'),
+      tag: btn?.tagName ?? null,
+      label: btn?.getAttribute('aria-label') ?? null,
+      text: btn?.innerText ?? '',
+      pointerEvents: getComputedStyle(wrap).pointerEvents,
+      inert: Boolean(wrap.inert),
+      right: r.right,
+      bottom: r.bottom,
+      top: r.top,
+      w: r.width,
+      h: r.height,
+      barTop: br?.top ?? null,
+      inRightHalf: r.left > vp.w / 2,
+      aboveBar: !br || r.bottom <= br.top + 1,
+    };
+  })(),
   paused: document.querySelector('video')?.paused ?? null,
   fs: document.querySelector('.player-container')?.classList.contains('is-fullscreen') ?? false,
   fakeFs: document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') ?? false,
@@ -992,7 +1069,10 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
 
   await tapVideoCenter(send);
   ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.paused, true, 'surface tap pauses immediately, without a double-tap delay');
+  assert.equal(ui.paused, false, 'single tap must not pause until the double-tap window elapses');
+  await waitForCenterTapDelay();
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'single surface tap still pauses after the double-tap delay');
   assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
   assert.equal(ui.centerPlay, true, 'paused state shows the center play icon');
   assert.equal(ui.centerPlayTag, 'BUTTON', 'center play must be a real button');
@@ -1002,8 +1082,9 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.toolbarPlay, false);
 
   await tapVideoCenter(send);
+  await waitForCenterTapDelay();
   ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.paused, false, 'surface tap on paused video resumes immediately');
+  assert.equal(ui.paused, false, 'single surface tap on paused video still resumes');
   assert.equal(ui.centerPlay, false, 'center play icon hides once playing');
   assert.equal(ui.controlsVisible, true, 'toolbar is shown on resume');
   await waitFor(
@@ -1627,18 +1708,65 @@ uiTest('hung leftover native exit falls back to overlay instead of stalling', as
   assert.equal(ui.fsLabel, 'Plein écran');
 });
 
-uiTest('video surface double-tap does not toggle fullscreen', async (t) => {
+uiTest('center double-tap toggles native-first fullscreen; single tap still pauses', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed');
   await loopAndPlay(send);
-  await tapVideoCenter(send);
-  await tapVideoCenter(send);
-  const ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.fsRequests, 0, 'double-tap on the video surface must not request fullscreen');
-  assert.equal(ui.fs, false);
-  assert.equal(ui.fakeFs, false);
+  await doubleTapVideoCenter(send, 'touch');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, 'center double-tap must reuse the native fullscreen path');
+  assert.equal(ui.nativeFs, true);
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false, 'successful native fullscreen must not use the CSS overlay');
+  assert.equal(ui.paused, false, 'double-tap must not also pause');
+
+  await doubleTapVideoCenter(send, 'touch');
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("is-fullscreen") === false');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'second center double-tap exits fullscreen');
   assert.equal(ui.nativeFs, false);
-  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.paused, false, 'exiting via double-tap must not pause');
+
+  await tapVideoCenter(send);
+  await waitForCenterTapDelay();
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, true, 'a single center tap still pauses');
+  assert.equal(ui.fs, false);
+});
+
+uiTest('center mouse double-click toggles fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await installFullscreenStub(send, 'succeed');
+  await loopAndPlay(send);
+  await doubleTapVideoCenter(send, 'mouse');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.fsRequests >= 1, 'mouse double-click on the center third must request fullscreen');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.paused, false, 'double-click must not fight single-click pause');
+});
+
+uiTest('left-third double-tap seeks and does not toggle fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.touch-left');
+      const opts = { bubbles: true, cancelable: true, pointerId: 21, pointerType: 'touch' };
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 900));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fsRequests, 0, 'edge double-tap must not request fullscreen');
+  assert.equal(ui.fs, false);
+  assert.equal(ui.paused, false);
 });
 
 uiTest('center play button is named and usable by click and keyboard', async (t) => {
@@ -1655,7 +1783,14 @@ uiTest('center play button is named and usable by click and keyboard', async (t)
   assert.equal(ui.toolbarPlay, false, 'play/pause must not live on the bottom toolbar');
 
   await clickSelector(send, 'button.center-play');
-  await waitFor(send, 'document.querySelector("video") && !document.querySelector("video").paused');
+  await waitFor(
+    send,
+    `(() => {
+      const v = document.querySelector('video');
+      const b = document.querySelector('button.center-play');
+      return Boolean(v && !v.paused && b && b.hidden);
+    })()`
+  );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'clicking the center play button resumes playback');
   assert.equal(ui.centerPlay, false);
@@ -1996,6 +2131,179 @@ uiTest('center tap does not play while the series-end overlay is showing', async
   assert.equal(ui.paused, true, 'center tap must not call play while is-end is showing');
   assert.equal(ui.endOverlay, true, 'end overlay must stay up; tap is not replay');
   assert.equal(ui.centerPlay, false);
+});
+
+uiTest('next-episode chip stays hidden on short titles even with a next file', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'short clip must not show the chip from t=0');
+  assert.equal(ui.nextUp.isEnd, false);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = Math.max(0, (v.duration || 0) - 0.2);
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 250));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'short clip must not show the chip near its own end');
+  assert.equal(ui.nextUp.isEnd, false);
+});
+
+uiTest('next-episode chip appears near the end when a next file exists', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await fakeDurationAndTime(send, 120, 105);
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, false, 'chip is visible when a next episode exists');
+  assert.equal(ui.nextUp.isEnd, false);
+  assert.equal(ui.nextUp.tag, 'BUTTON', 'next-up control must be a real button');
+  assert.equal(ui.nextUp.label, 'Épisode suivant');
+  assert.match(ui.nextUp.text, /Épisode suivant/);
+  assert.match(ui.nextUp.text, /e02\.mp4/);
+  assert.equal(ui.nextUp.inRightHalf, true, 'chip sits on the bottom-right');
+  assert.equal(ui.nextUp.pointerEvents, 'auto');
+  assert.equal(ui.nextUp.inert, false);
+  if (ui.controlsVisible) {
+    assert.equal(ui.nextUp.aboveBar, true, 'chip sits just above the toolbar');
+  }
+});
+
+uiTest('next-episode chip stays clickable after the toolbar auto-hides and loads the next file', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await fakeDurationAndTime(send, 120, 105);
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'toolbar is auto-hidden');
+  assert.equal(ui.nextUp.hidden, false, 'chip must remain visible without the toolbar');
+  assert.equal(ui.nextUp.inert, false);
+  await clickSelector(send, '.next-up-btn');
+  await waitFor(send, 'location.hash.includes("e02")');
+  const hash = await evaluate(send, 'location.hash');
+  assert.match(hash, /e02/);
+});
+
+uiTest('next-episode chip is hidden when there is no next episode', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playPath: 'Serie/e02.mp4' }
+  );
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.currentTime = Math.max(0, (v.duration || 0) - 0.2);
+      return true;
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 250));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'last episode must not offer Épisode suivant');
+  assert.equal(ui.nextUp.isEnd, false);
+  assert.equal(ui.bar.nextVisible, false, 'toolbar next control stays hidden without a next file');
+});
+
+uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await fakeDurationAndTime(send, 120, 105);
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = 40;
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'chip must hide after scrubbing out of the last 20s');
+  assert.equal(ui.nextUp.isEnd, false);
+});
+
+uiTest('seeking after series-end does not hide the is-end overlay', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playPath: 'Serie/e02.mp4' }
+  );
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.muted = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = Math.max(0, v.duration - 0.05);
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && el.classList.contains('is-end');
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = 0;
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.endOverlay, true, 'is-end overlay must survive a seek after ended');
+  assert.equal(ui.nextUp.hidden, false);
+  assert.equal(ui.nextUp.isEnd, true);
 });
 
 uiTest('narrow desktop window still tries native fullscreen', async (t) => {
@@ -2606,6 +2914,21 @@ test('cast src allowlist is same-origin relative /api/media or /api/hls only', (
   assert.equal(isAllowedCastSrc('/api/media/%2e/e01.mp4?exp=1&sig=abc'), false);
   assert.equal(isAllowedCastSrc('/api/media//e01.mp4?exp=1&sig=abc'), false, 'empty path segment');
   assert.equal(isAllowedCastSrc('/api/hls/Serie/e01.mp4/%2e%2e/index.m3u8?exp=1&sig=abc'), false);
+});
+
+test('next-episode prompt is only near the end and only when a next file exists', () => {
+  const next = { path: 'Serie/e02.mp4', name: 'e02.mp4' };
+  assert.equal(shouldShowNextEpisode(next, 100, 80), true, 'exactly 20s remaining');
+  assert.equal(shouldShowNextEpisode(next, 100, 85), true, 'inside the last 20s');
+  assert.equal(shouldShowNextEpisode(next, 100, 79), false, 'more than 20s remaining');
+  assert.equal(shouldShowNextEpisode(next, 100, 100), true, 'ended / remaining 0');
+  assert.equal(shouldShowNextEpisode(null, 100, 99), false, 'no next episode');
+  assert.equal(shouldShowNextEpisode(next, 0, 0), false, 'unknown duration');
+  assert.equal(shouldShowNextEpisode(next, 20, 19), false, 'duration equal to lead');
+  assert.equal(shouldShowNextEpisode(next, 2, 1), false, 'short title near its own end');
+  assert.equal(shouldShowNextEpisode(next, 21, 1), true, 'just longer than lead, 20s remaining');
+  assert.equal(shouldShowNextEpisode(next, 21, 0), false, 'just longer than lead, still outside window');
+  assert.equal(NEXT_UP_LEAD_S, 20);
 });
 
 uiTest('hostile mint URL is not assigned and does not prompt', async (t) => {
