@@ -12,6 +12,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { isAllowedCastSrc } from '../public/player.js';
 
 const PASSWORD = 'integration-test-password';
 const SESSION_SECRET = 'integration-test-session-secret-at-least-32-chars';
@@ -655,6 +656,7 @@ async function openPlayer(
     hlsMode,
     failCastUrl = false,
     slowCastUrlMs = 0,
+    spoofCastUrl,
   } = {}
 ) {
   const { baseUrl } = await startServer(t, { playback });
@@ -699,6 +701,24 @@ async function openPlayer(
             }));
           }
           return orig(input, init);
+        };
+      })();`,
+    });
+  }
+  if (spoofCastUrl) {
+    const spoof = String(spoofCastUrl);
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        const spoof = ${JSON.stringify(spoof)};
+        window.fetch = function(input, init) {
+          const url = String(input);
+          if (!url.includes('/api/cast-url')) return orig(input, init);
+          const exp = Math.floor(Date.now() / 1000) + 3600;
+          return Promise.resolve(new Response(JSON.stringify({ url: spoof, exp }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }));
         };
       })();`,
     });
@@ -2432,6 +2452,57 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   assert.ok(ui.remotePrompts >= 1, 'same gesture must prompt once mint succeeds');
   assert.match(ui.videoSrc, /[?&]sig=/);
 });
+
+test('cast src allowlist is same-origin relative /api/media or /api/hls only', () => {
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=1&sig=abc'), true);
+  assert.equal(isAllowedCastSrc('/api/hls/Serie/e01.mp4/index.m3u8?exp=1&sig=abc'), true);
+  assert.equal(isAllowedCastSrc('https://evil.example/api/media/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('http://127.0.0.1/api/media/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('//evil.example/api/media/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('/\\/evil.example/api/media/x'), false);
+  assert.equal(isAllowedCastSrc('/api/download/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('/api/thumbs/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc('/files/Serie/e01.mp4'), false);
+  assert.equal(isAllowedCastSrc(''), false);
+  assert.equal(isAllowedCastSrc(null), false);
+});
+
+uiTest('hostile mint URL is not assigned and does not prompt', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    {
+      remotePlayback: { available: true },
+      spoofCastUrl: 'https://evil.example/api/media/Serie/e01.mp4',
+    }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await new Promise((r) => setTimeout(r, 250));
+  const ready = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
+  assert.equal(ready, null, 'rejected mint must not mark the button ready');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await new Promise((r) => setTimeout(r, 200));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 0, 'must not prompt with a rejected cast URL');
+  assert.match(ui.videoSrc, /\/api\/media\//);
+  assert.doesNotMatch(ui.videoSrc, /evil\.example/);
+  assert.doesNotMatch(ui.videoSrc, /^https?:/i);
+  assert.doesNotMatch(ui.videoSrc, /^\/\//);
+});
+
 
 
 

@@ -19,6 +19,13 @@ const WATCHED_PREFIX = 'sanem-watched:';
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 const BAR_HIDE_MS = 2000;
+// Cast fling src must stay a same-origin relative path. Absolute and
+// protocol-relative URLs would let a compromised mint send the TV elsewhere.
+const CAST_SRC_ALLOW = /^\/api\/(media|hls)\//;
+
+export function isAllowedCastSrc(url) {
+  return typeof url === 'string' && CAST_SRC_ALLOW.test(url);
+}
 
 const fmtTime = (s) => {
   if (!Number.isFinite(s) || s < 0) s = 0;
@@ -388,11 +395,12 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   const beginCastWithUrl = (url) => {
     if (!url || !castAlive || mseHls) return Promise.resolve();
+    if (!isAllowedCastSrc(url)) return Promise.resolve();
     applySignedSrc(url);
     return promptRemote();
   };
   const applySignedSrc = (url) => {
-    if (!url) return;
+    if (!isAllowedCastSrc(url)) return;
     if ((video.getAttribute('src') || '') === url) {
       castSrcActive = true;
       return;
@@ -404,6 +412,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   const peekValidCastUrl = (minTtlSec = 60) => {
     if (!castUrlCache?.url || !castUrlCache.exp) return null;
+    if (!isAllowedCastSrc(castUrlCache.url)) return null;
     const now = Math.floor(Date.now() / 1000);
     if (castUrlCache.exp - now < minTtlSec) return null;
     return castUrlCache.url;
@@ -421,6 +430,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       .then((body) => {
         if (!castAlive) return null;
         if (!body?.url || !body.exp) throw new Error('cast-url missing');
+        if (!isAllowedCastSrc(body.url)) throw new Error('cast-url rejected');
         castUrlCache = { url: body.url, exp: Number(body.exp) };
         btnCast.setAttribute('data-cast-ready', '1');
         return castUrlCache.url;

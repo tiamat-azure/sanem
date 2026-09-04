@@ -495,6 +495,9 @@ hlsRouter.get('/hls/*splat', requireSessionOrCastSig(hlsKindAndPath), async (req
     markPlayed(relativePath);
     res.type('application/vnd.apple.mpegurl');
     res.set('Cache-Control', 'private, max-age=30');
+    // Segment URIs include ?exp&sig only on the cast-auth path. Cookie vs
+    // cookieless clients must not share a cached playlist.
+    res.set('Vary', 'Cookie');
     const q = req.castQuery;
     const segmentQuery = q
       ? `?exp=${encodeURIComponent(q.exp)}&sig=${encodeURIComponent(q.sig)}`

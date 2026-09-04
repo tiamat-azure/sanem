@@ -41,11 +41,47 @@ async function waitForServer(baseUrl, timeoutMs = 15000) {
   throw new Error('Server did not become ready in time');
 }
 
-async function startServer(t) {
+async function startServer(t, { seedHls = false } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sanem-media-'));
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const serverPath = path.join(import.meta.dirname, '..', 'src', 'server.js');
+
+  if (seedHls) {
+    const rel = 'clip.mp4';
+    const uploads = path.join(dataDir, 'uploads');
+    await fs.mkdir(uploads, { recursive: true });
+    await fs.writeFile(path.join(uploads, rel), crypto.randomBytes(256));
+    const stats = await fs.stat(path.join(uploads, rel));
+    const hash = crypto.createHash('sha256').update(rel).digest('hex');
+    const cacheDir = path.join(dataDir, 'transcode', hash);
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, 'probe.json'),
+      JSON.stringify({
+        relativePath: rel,
+        mtimeMs: stats.mtimeMs,
+        size: stats.size,
+        info: {
+          kind: 'video',
+          playback: 'hls',
+          lane: 1,
+          duration: 2,
+          width: 320,
+          height: 180,
+          vcodec: 'h264',
+          acodec: 'aac',
+          container: 'mov,mp4,m4a,3gp,3g2,mj2',
+          heavy: false,
+          internalSubtitles: 0,
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(cacheDir, 'plan.json'),
+      JSON.stringify({ mtimeMs: stats.mtimeMs, plan: [{ start: 0, dur: 2 }] })
+    );
+  }
 
   const child = spawn(process.execPath, [serverPath], {
     env: {
@@ -256,4 +292,33 @@ test('signed cast media URL works without a session cookie; bad tokens 401', asy
   const download = await fetch(`${baseUrl}/api/download/clip.mp4${new URL(payload.url, baseUrl).search}`);
   assert.equal(download.status, 401, 'download stays cookie-only');
 });
+
+test('HLS playlist sets Vary: Cookie so cast and cookie clients do not share cache', async (t) => {
+  const { baseUrl } = await startServer(t, { seedHls: true });
+  const cookie = await login(baseUrl);
+
+  const withCookie = await fetch(`${baseUrl}/api/hls/clip.mp4/index.m3u8`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(withCookie.status, 200);
+  assert.match(withCookie.headers.get('vary') ?? '', /Cookie/i);
+  const cookieBody = await withCookie.text();
+  assert.match(cookieBody, /seg-0\.ts(?:\n|$)/);
+  assert.doesNotMatch(cookieBody, /[?&]sig=/);
+
+  const minted = await fetch(`${baseUrl}/api/cast-url/clip.mp4?kind=hls`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(minted.status, 200);
+  const payload = await minted.json();
+  assert.match(payload.url, /\/api\/hls\/clip\.mp4\/index\.m3u8\?/);
+
+  const castPl = await fetch(`${baseUrl}${payload.url}`);
+  assert.equal(castPl.status, 200);
+  assert.match(castPl.headers.get('vary') ?? '', /Cookie/i);
+  const castBody = await castPl.text();
+  assert.match(castBody, /seg-0\.ts\?exp=/);
+  assert.match(castBody, /[?&]sig=/);
+});
+
 
