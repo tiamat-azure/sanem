@@ -251,11 +251,14 @@ export function mountPlayer(root, { file, next, onNext }) {
   let pendingPlay = false;
   const cookieSrc = video.getAttribute('src') || '';
   const offerNextUp = () => {
-    if (
-      shouldShowNextEpisode(next, video.duration || file.duration || 0, video.currentTime || 0)
-    ) {
-      nextOverlay.hidden = false;
-    }
+    // Series-end overlay stays until the user leaves. Do not hide it when a
+    // later seek/timeupdate falls outside the next-up window.
+    if (nextOverlay.classList.contains('is-end')) return;
+    nextOverlay.hidden = !shouldShowNextEpisode(
+      next,
+      video.duration || file.duration || 0,
+      video.currentTime || 0
+    );
   };
   video.addEventListener('loadedmetadata', () => {
     const fromPending = pendingSeek;

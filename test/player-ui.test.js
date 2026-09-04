@@ -2183,6 +2183,99 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
   assert.equal(ui.bar.nextVisible, false, 'toolbar next control stays hidden without a next file');
 });
 
+uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      let t = v.currentTime || 0;
+      Object.defineProperty(v, 'duration', { configurable: true, get() { return 120; } });
+      Object.defineProperty(v, 'currentTime', {
+        configurable: true,
+        get() { return t; },
+        set(n) { t = n; },
+      });
+      t = 105;
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = 40;
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, 'chip must hide after scrubbing out of the last 20s');
+  assert.equal(ui.nextUp.isEnd, false);
+});
+
+uiTest('seeking after series-end does not hide the is-end overlay', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playPath: 'Serie/e02.mp4' }
+  );
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.muted = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = Math.max(0, v.duration - 0.05);
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && el.classList.contains('is-end');
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = 0;
+      v.dispatchEvent(new Event('timeupdate'));
+      v.dispatchEvent(new Event('seeked'));
+      return true;
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.endOverlay, true, 'is-end overlay must survive a seek after ended');
+  assert.equal(ui.nextUp.hidden, false);
+  assert.equal(ui.nextUp.isEnd, true);
+});
+
 uiTest('narrow desktop window still tries native fullscreen', async (t) => {
   const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   const before = await evaluate(
