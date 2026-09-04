@@ -696,6 +696,44 @@ html.player-fs body {
   pointer-events: auto;
 }
 
+.cast-btn {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top, 0px));
+  right: max(10px, env(safe-area-inset-right, 0px));
+  z-index: 5;
+  opacity: 0;
+  pointer-events: none;
+  color: var(--sanem-accent);
+  background: rgba(6, 7, 16, 0.55);
+  border-color: color-mix(in srgb, var(--sanem-accent) 50%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sanem-accent) 35%, transparent);
+  transition: opacity 0.2s, background 0.15s, box-shadow 0.15s;
+}
+
+.player-container.controls-visible .cast-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.cast-btn svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+.cast-btn.is-casting,
+.cast-btn[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--sanem-accent) 22%, rgba(6, 7, 16, 0.72));
+  box-shadow:
+    0 0 12px var(--sanem-accent),
+    0 0 24px color-mix(in srgb, var(--sanem-accent) 45%, transparent);
+}
+
+button.cast-btn:hover {
+  transform: none;
+  background: color-mix(in srgb, var(--sanem-accent) 16%, rgba(6, 7, 16, 0.65));
+}
+
 .center-play {
   position: absolute;
   left: 50%;

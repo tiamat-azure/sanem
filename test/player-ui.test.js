@@ -564,7 +564,69 @@ async function clickFullscreen(send) {
   );
 }
 
-async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH, blockAutoplay = false } = {}) {
+function remotePlaybackStubSource(options = {}) {
+  return `(function(){
+    const opts = ${JSON.stringify({
+      hasRemote: true,
+      available: true,
+      state: 'disconnected',
+      watchReject: false,
+      promptReject: false,
+      ...options,
+    })};
+    window.__remotePrompts = 0;
+    window.__remoteWatchCalls = 0;
+    const remotes = new WeakMap();
+    class FakeRemote extends EventTarget {
+      constructor() {
+        super();
+        this.state = opts.state;
+        this._cbs = [];
+      }
+      watchAvailability(cb) {
+        window.__remoteWatchCalls += 1;
+        if (opts.watchReject) {
+          return Promise.reject(Object.assign(new Error('NotSupportedError'), { name: 'NotSupportedError' }));
+        }
+        this._cbs.push(cb);
+        queueMicrotask(() => cb(Boolean(opts.available)));
+        return Promise.resolve(1);
+      }
+      cancelWatchAvailability() {
+        this._cbs = [];
+        return Promise.resolve();
+      }
+      prompt() {
+        window.__remotePrompts += 1;
+        if (opts.promptReject) {
+          return Promise.reject(Object.assign(new Error('NotFoundError'), { name: 'NotFoundError' }));
+        }
+        if (this.state === 'disconnected') this.state = 'connected';
+        else this.state = 'disconnected';
+        this.dispatchEvent(new Event('statechange'));
+        return Promise.resolve();
+      }
+    }
+    Object.defineProperty(HTMLVideoElement.prototype, 'remote', {
+      configurable: true,
+      get() {
+        if (!opts.hasRemote) return undefined;
+        let remote = remotes.get(this);
+        if (!remote) {
+          remote = new FakeRemote();
+          remotes.set(this, remote);
+        }
+        return remote;
+      },
+    });
+  })();`;
+}
+
+async function openPlayer(
+  t,
+  viewport,
+  { phone = true, playPath = PLAY_PATH, blockAutoplay = false, remotePlayback } = {}
+) {
   const { baseUrl } = await startServer(t);
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
@@ -577,6 +639,11 @@ async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH, blo
     httpOnly: true,
     path: '/',
   });
+  if (remotePlayback) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: remotePlaybackStubSource(remotePlayback),
+    });
+  }
   if (blockAutoplay) {
     await send('Page.addScriptToEvaluateOnNewDocument', {
       source: `(function(){
@@ -662,6 +729,39 @@ const SNAPSHOT = `({
     };
   })(),
   viewport: { w: window.innerWidth, h: window.innerHeight, portrait: window.matchMedia('(orientation: portrait)').matches },
+  remotePrompts: window.__remotePrompts ?? 0,
+  remoteWatchCalls: window.__remoteWatchCalls ?? 0,
+  menuBtn: (() => {
+    const el = document.getElementById('app-menu-button');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  })(),
+  cast: (() => {
+    const el = document.querySelector('.cast-btn');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+      hidden: el.hidden,
+      label: el.getAttribute('aria-label'),
+      title: el.getAttribute('title'),
+      pressed: el.getAttribute('aria-pressed'),
+      casting: el.classList.contains('is-casting'),
+      opacity: cs.opacity,
+      pointerEvents: cs.pointerEvents,
+      inert: Boolean(el.inert),
+      display: cs.display,
+      x: r.x,
+      y: r.y,
+      w: r.width,
+      h: r.height,
+      left: r.left,
+      right: r.right,
+      top: r.top,
+      bottom: r.bottom,
+    };
+  })(),
 })`;
 
 uiTest('player UI on a smartphone portrait viewport', async (t) => {
@@ -1830,3 +1930,154 @@ uiTest('narrow desktop overlay fallback does not CSS-rotate', async (t) => {
   assert.ok(Math.abs(ui.player.h - ui.viewport.h) < 8, `overlay height ${ui.player.h} vs ${ui.viewport.h}`);
   assert.ok(ui.player.h > ui.player.w, 'desktop overlay stays portrait, not rotated onto the long edge');
 });
+
+function rectsOverlap(a, b, gap = 0) {
+  return (
+    a.left < b.right + gap &&
+    a.right + gap > b.left &&
+    a.top < b.bottom + gap &&
+    a.bottom + gap > b.top
+  );
+}
+
+uiTest('cast button is hidden when Remote Playback is unsupported', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { hasRemote: false } }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".cast-btn"))');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, true);
+  assert.equal(ui.cast.display, 'none');
+  assert.equal(ui.remotePrompts, 0);
+});
+
+uiTest('cast button is hidden when watchAvailability reports no devices', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: false } }
+  );
+  await waitFor(send, '(window.__remoteWatchCalls ?? 0) >= 1');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, true);
+  assert.equal(ui.cast.display, 'none');
+  assert.equal(ui.remotePrompts, 0, 'prompt must not run just because the player mounted');
+});
+
+uiTest('cast button is shown when watchAvailability cannot monitor devices', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { watchReject: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, false);
+  assert.equal(ui.cast.label, 'Diffuser sur un écran');
+  assert.equal(ui.controlsVisible, true);
+  assert.notEqual(ui.cast.opacity, '0');
+});
+
+uiTest('cast button follows overlay chrome and sits in the video top-right', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true);
+  assert.equal(ui.cast.hidden, false);
+  assert.equal(ui.cast.label, 'Diffuser sur un écran');
+  assert.equal(ui.cast.title, 'Diffuser sur un écran');
+  assert.equal(ui.cast.pressed, 'false');
+  assert.notEqual(ui.cast.opacity, '0');
+  assert.notEqual(ui.cast.pointerEvents, 'none');
+  assert.ok(ui.cast.w >= 44, `cast target too small: ${ui.cast.w}`);
+  assert.ok(ui.cast.h >= 44, `cast target too small: ${ui.cast.h}`);
+  assert.ok(ui.cast.y >= ui.player.y - 1, 'cast must sit inside the video frame');
+  assert.ok(ui.cast.top - ui.player.y < 48, 'cast must be near the top of the video');
+  assert.ok(ui.player.x + ui.player.w - ui.cast.right < 48, 'cast must be near the right of the video');
+  assert.equal(rectsOverlap(ui.cast, ui.menuBtn), false, 'cast must not collide with the hamburger');
+
+  await loopAndPlay(send);
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, false, 'availability stays true while chrome hides');
+  assert.equal(ui.cast.opacity, '0');
+  assert.equal(ui.cast.pointerEvents, 'none');
+  assert.equal(ui.cast.inert, true);
+  assert.equal(ui.paused, false);
+});
+
+uiTest('cast prompt is only opened from a user gesture', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 0, 'prompt must wait for a click/tap');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true);
+  await clickSelector(send, '.cast-btn');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+});
+
+uiTest('cast button reflects connected state and does not pause playback', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.equal(ui.paused, false, 'casting must not click-through to pause the surface');
+  assert.equal(ui.cast.pressed, 'true');
+  assert.equal(ui.cast.casting, true);
+  assert.equal(ui.cast.hidden, false);
+  await clickSelector(send, '.cast-btn');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 2);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.equal(ui.cast.casting, false);
+  assert.equal(ui.paused, false);
+});
+
