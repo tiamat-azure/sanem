@@ -378,6 +378,19 @@ export function mountPlayer(root, { file, next, onNext }) {
     pendingPlay = !video.paused;
     video.src = cookieSrc;
   };
+  const promptRemote = () => {
+    if (!hasRemotePrompt(video.remote)) return Promise.resolve();
+    return Promise.resolve(video.remote.prompt()).catch(() => {
+      // Many UAs never fire statechange on picker cancel; always put the
+      // cookie-gated src back if we are still mounted.
+      if (castAlive) restoreCookieSrc();
+    });
+  };
+  const beginCastWithUrl = (url) => {
+    if (!url || !castAlive || mseHls) return Promise.resolve();
+    applySignedSrc(url);
+    return promptRemote();
+  };
   const applySignedSrc = (url) => {
     if (!url) return;
     if ((video.getAttribute('src') || '') === url) {
@@ -471,16 +484,18 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (!castAlive || mseHls) return;
     if (!hasRemotePrompt(video.remote)) return;
     if (isCastLive()) {
-      video.remote.prompt().catch(() => {});
+      promptRemote();
       return;
     }
     const signed = peekValidCastUrl();
-    if (!signed) {
-      refreshCastUrl();
+    if (signed) {
+      beginCastWithUrl(signed);
       return;
     }
-    applySignedSrc(signed);
-    video.remote.prompt().catch(() => {});
+    refreshCastUrl().then((url) => {
+      if (!url || !castAlive) return;
+      return beginCastWithUrl(url);
+    });
   });
 
   // --- progress bar scrubbing ---

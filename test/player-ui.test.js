@@ -654,6 +654,7 @@ async function openPlayer(
     playback = 'direct',
     hlsMode,
     failCastUrl = false,
+    slowCastUrlMs = 0,
   } = {}
 ) {
   const { baseUrl } = await startServer(t, { playback });
@@ -698,6 +699,21 @@ async function openPlayer(
             }));
           }
           return orig(input, init);
+        };
+      })();`,
+    });
+  }
+  if (slowCastUrlMs > 0) {
+    const delay = Number(slowCastUrlMs);
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        window.fetch = function(input, init) {
+          const url = String(input);
+          if (!url.includes('/api/cast-url')) return orig(input, init);
+          return new Promise((resolve, reject) => {
+            setTimeout(() => orig(input, init).then(resolve, reject), ${delay});
+          });
         };
       })();`,
     });
@@ -2348,6 +2364,75 @@ uiTest('cast prompt is skipped when signed URL mint fails', async (t) => {
   assert.equal(ui.remotePrompts, 0, 'must not prompt with a cookie URL when mint fails');
   assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
 });
+
+uiTest('prompt cancel restores the cookie-gated src', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true, promptReject: true } }
+  );
+  await waitCastReady(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(
+    send,
+    `(function(){
+      const src = document.querySelector('video')?.getAttribute('src') || '';
+      return src.includes('/api/media/') && !/[?&]sig=/.test(src);
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.match(ui.videoSrc, /\/api\/media\//);
+  assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+});
+
+uiTest('cast click still prompts after an in-flight mint', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true }, slowCastUrlMs: 2000 }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  const readyBefore = await evaluate(
+    send,
+    'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")'
+  );
+  assert.equal(readyBefore, null, 'click before prefetch must exercise the refresh chain');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.remotePrompts >= 1, 'same gesture must prompt once mint succeeds');
+  assert.match(ui.videoSrc, /[?&]sig=/);
+});
+
 
 
 
