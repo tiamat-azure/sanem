@@ -2175,6 +2175,8 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.bar.nextVisible, false, 'toolbar next control stays hidden without a next file');
 });
+
+uiTest('narrow desktop window still tries native fullscreen', async (t) => {
   const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   const before = await evaluate(
     send,
