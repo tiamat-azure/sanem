@@ -574,6 +574,7 @@ function remotePlaybackStubSource(options = {}) {
       watchReject: false,
       watchRejectDelayMs: 0,
       promptReject: false,
+      promptDismiss: false,
       ...options,
     })};
     window.__remotePrompts = 0;
@@ -615,6 +616,11 @@ function remotePlaybackStubSource(options = {}) {
         window.__remotePrompts += 1;
         if (opts.promptReject) {
           return Promise.reject(Object.assign(new Error('NotFoundError'), { name: 'NotFoundError' }));
+        }
+        if (opts.promptDismiss) {
+          // Picker dismissed: promise fulfills, state stays disconnected,
+          // no statechange (the UA path this stub models).
+          return Promise.resolve();
         }
         if (this.state === 'disconnected') this.state = 'connected';
         else this.state = 'disconnected';
@@ -2390,6 +2396,42 @@ uiTest('prompt cancel restores the cookie-gated src', async (t) => {
     t,
     { width: 390, height: 844, landscape: false },
     { remotePlayback: { available: true, promptReject: true } }
+  );
+  await waitCastReady(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(
+    send,
+    `(function(){
+      const src = document.querySelector('video')?.getAttribute('src') || '';
+      return src.includes('/api/media/') && !/[?&]sig=/.test(src);
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.match(ui.videoSrc, /\/api\/media\//);
+  assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+});
+
+uiTest('prompt fulfill while disconnected restores the cookie-gated src', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true, promptDismiss: true } }
   );
   await waitCastReady(send);
   await evaluate(

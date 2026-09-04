@@ -387,11 +387,19 @@ export function mountPlayer(root, { file, next, onNext }) {
   };
   const promptRemote = () => {
     if (!hasRemotePrompt(video.remote)) return Promise.resolve();
-    return Promise.resolve(video.remote.prompt()).catch(() => {
-      // Many UAs never fire statechange on picker cancel; always put the
-      // cookie-gated src back if we are still mounted.
-      if (castAlive) restoreCookieSrc();
-    });
+    return Promise.resolve(video.remote.prompt()).then(
+      () => {
+        // Some UAs fulfill prompt() on picker dismiss and never fire
+        // statechange. If we are still not connecting/connected, put the
+        // cookie-gated src back immediately.
+        if (castAlive && !isCastLive()) restoreCookieSrc();
+      },
+      () => {
+        // Many UAs never fire statechange on picker cancel; always put the
+        // cookie-gated src back if we are still mounted.
+        if (castAlive) restoreCookieSrc();
+      }
+    );
   };
   const beginCastWithUrl = (url) => {
     if (!url || !castAlive || mseHls) return Promise.resolve();
