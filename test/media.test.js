@@ -41,11 +41,48 @@ async function waitForServer(baseUrl, timeoutMs = 15000) {
   throw new Error('Server did not become ready in time');
 }
 
-async function startServer(t) {
+async function startServer(t, { seedHls = false } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sanem-media-'));
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const serverPath = path.join(import.meta.dirname, '..', 'src', 'server.js');
+
+  if (seedHls) {
+    const rel = 'clip.mp4';
+    const uploads = path.join(dataDir, 'uploads');
+    await fs.mkdir(uploads, { recursive: true });
+    await fs.writeFile(path.join(uploads, rel), crypto.randomBytes(256));
+    const stats = await fs.stat(path.join(uploads, rel));
+    const hash = crypto.createHash('sha256').update(rel).digest('hex');
+    const cacheDir = path.join(dataDir, 'transcode', hash);
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, 'probe.json'),
+      JSON.stringify({
+        relativePath: rel,
+        mtimeMs: stats.mtimeMs,
+        size: stats.size,
+        info: {
+          kind: 'video',
+          playback: 'hls',
+          lane: 1,
+          duration: 2,
+          width: 320,
+          height: 180,
+          vcodec: 'h264',
+          acodec: 'aac',
+          container: 'mov,mp4,m4a,3gp,3g2,mj2',
+          heavy: false,
+          internalSubtitles: 0,
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(cacheDir, 'plan.json'),
+      JSON.stringify({ mtimeMs: stats.mtimeMs, plan: [{ start: 0, dur: 2 }] })
+    );
+    await fs.writeFile(path.join(cacheDir, 'seg-0.ts'), Buffer.from('ts'));
+  }
 
   const child = spawn(process.execPath, [serverPath], {
     env: {
@@ -126,3 +163,185 @@ test('the four media routes require a session cookie (401)', async (t) => {
     assert.equal(res.status, 401, `expected 401 for ${p}, got ${res.status}`);
   }
 });
+
+test('cast signer: valid token accepts, expired and wrong-id reject', async () => {
+  process.env.SANEM_PASSWORD = PASSWORD;
+  process.env.SANEM_SESSION_SECRET = SESSION_SECRET;
+  process.env.SANEM_DATA_DIR ??= os.tmpdir();
+  const {
+    mintCastToken,
+    verifyCastToken,
+    castTtlSeconds,
+    CAST_TTL_DEFAULT_SEC,
+    CAST_TTL_MARGIN_SEC,
+    CAST_TTL_MAX_SEC,
+  } = await import('../src/auth.js');
+  const nowSec = 1_700_000_000;
+  const token = mintCastToken({
+    kind: 'media',
+    mediaPath: 'Serie/e01.mp4',
+    durationSec: 90,
+    nowSec,
+  });
+  assert.equal(token.exp, nowSec + CAST_TTL_DEFAULT_SEC, 'short title is floored at 6h');
+  assert.equal(
+    verifyCastToken({
+      kind: 'media',
+      mediaPath: 'Serie/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec,
+    }),
+    true
+  );
+  assert.equal(
+    verifyCastToken({
+      kind: 'media',
+      mediaPath: 'Serie/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec: token.exp,
+    }),
+    false,
+    'expired (now >= exp) must reject'
+  );
+  assert.equal(
+    verifyCastToken({
+      kind: 'media',
+      mediaPath: 'Other/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec,
+    }),
+    false,
+    'wrong media id must reject'
+  );
+  assert.equal(
+    verifyCastToken({
+      kind: 'hls',
+      mediaPath: 'Serie/e01.mp4',
+      exp: token.exp,
+      sig: token.sig,
+      nowSec,
+    }),
+    false,
+    'wrong kind must reject'
+  );
+  assert.equal(castTtlSeconds(null), CAST_TTL_DEFAULT_SEC);
+  assert.equal(castTtlSeconds(0), CAST_TTL_DEFAULT_SEC);
+  assert.equal(castTtlSeconds(90), CAST_TTL_DEFAULT_SEC, 'duration+2h below 6h still floors at 6h');
+  assert.equal(
+    castTtlSeconds(5 * 3600),
+    5 * 3600 + CAST_TTL_MARGIN_SEC,
+    '5h + 2h sits between the 6h floor and 12h ceiling'
+  );
+  assert.equal(castTtlSeconds(10 * 3600), CAST_TTL_MAX_SEC, '10h + 2h hits the 12h ceiling');
+  assert.equal(castTtlSeconds(15 * 3600), CAST_TTL_MAX_SEC, 'TTL is never longer than 12h');
+});
+
+test('signed cast media URL works without a session cookie; bad tokens 401', async (t) => {
+  const { baseUrl, dataDir } = await startServer(t);
+  const cookie = await login(baseUrl);
+  const body = crypto.randomBytes(4096);
+  await fs.writeFile(path.join(dataDir, 'uploads', 'clip.mp4'), body);
+
+  const noAuth = await fetch(`${baseUrl}/api/cast-url/clip.mp4?kind=media`);
+  assert.equal(noAuth.status, 401);
+
+  const minted = await fetch(`${baseUrl}/api/cast-url/clip.mp4?kind=media`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(minted.status, 200);
+  assert.match(minted.headers.get('cache-control') ?? '', /private/i);
+  assert.match(minted.headers.get('cache-control') ?? '', /no-store/i);
+  assert.match(minted.headers.get('vary') ?? '', /Cookie/i);
+  const payload = await minted.json();
+  assert.equal(typeof payload.url, 'string');
+  assert.equal(typeof payload.exp, 'number');
+  assert.match(payload.url, /\/api\/media\/clip\.mp4\?/);
+  assert.match(payload.url, /[?&]exp=/);
+  assert.match(payload.url, /[?&]sig=/);
+
+  const signed = await fetch(`${baseUrl}${payload.url}`);
+  assert.equal(signed.status, 200);
+  const signedBuf = Buffer.from(await signed.arrayBuffer());
+  assert.deepEqual(signedBuf, body);
+
+  const ranged = await fetch(`${baseUrl}${payload.url}`, {
+    headers: { Range: 'bytes=0-9' },
+  });
+  assert.equal(ranged.status, 206);
+  assert.equal(Buffer.from(await ranged.arrayBuffer()).length, 10);
+
+  const { mintCastToken, signedCastPath } = await import('../src/auth.js');
+  const dead = mintCastToken({
+    kind: 'media',
+    mediaPath: 'clip.mp4',
+    durationSec: 10,
+    nowSec: 1000,
+  });
+  const expiredRes = await fetch(`${baseUrl}${signedCastPath('media', 'clip.mp4', dead)}`);
+  assert.equal(expiredRes.status, 401, 'expired signature must 401');
+
+  const wrongSig = new URL(payload.url, baseUrl);
+  wrongSig.searchParams.set('sig', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  const wrongSigRes = await fetch(wrongSig);
+  assert.equal(wrongSigRes.status, 401);
+
+  const wrongPath = payload.url.replace('clip.mp4', 'other.mp4');
+  await fs.writeFile(path.join(dataDir, 'uploads', 'other.mp4'), body);
+  const wrongIdRes = await fetch(`${baseUrl}${wrongPath}`);
+  assert.equal(wrongIdRes.status, 401, 'signature bound to media id');
+
+  const download = await fetch(`${baseUrl}/api/download/clip.mp4${new URL(payload.url, baseUrl).search}`);
+  assert.equal(download.status, 401, 'download stays cookie-only');
+});
+
+test('HLS playlist sets Vary: Cookie so cast and cookie clients do not share cache', async (t) => {
+  const { baseUrl } = await startServer(t, { seedHls: true });
+  const cookie = await login(baseUrl);
+
+  const withCookie = await fetch(`${baseUrl}/api/hls/clip.mp4/index.m3u8`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(withCookie.status, 200);
+  assert.match(withCookie.headers.get('vary') ?? '', /Cookie/i);
+  const cookieBody = await withCookie.text();
+  assert.match(cookieBody, /seg-0\.ts(?:\n|$)/);
+  assert.doesNotMatch(cookieBody, /[?&]sig=/);
+
+  const minted = await fetch(`${baseUrl}/api/cast-url/clip.mp4?kind=hls`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(minted.status, 200);
+  const payload = await minted.json();
+  assert.match(payload.url, /\/api\/hls\/clip\.mp4\/index\.m3u8\?/);
+
+  const castPl = await fetch(`${baseUrl}${payload.url}`);
+  assert.equal(castPl.status, 200);
+  assert.match(castPl.headers.get('vary') ?? '', /Cookie/i);
+  const castBody = await castPl.text();
+  assert.match(castBody, /seg-0\.ts\?exp=/);
+  assert.match(castBody, /[?&]sig=/);
+
+  const cookieSeg = await fetch(`${baseUrl}/api/hls/clip.mp4/seg-0.ts`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(cookieSeg.status, 200);
+  assert.match(cookieSeg.headers.get('cache-control') ?? '', /max-age=86400/i);
+
+  const segLine = castBody.match(/seg-0\.ts\?[^\r\n]+/);
+  assert.ok(segLine, 'cast playlist must list a signed segment URI');
+  const castSeg = await fetch(`${baseUrl}/api/hls/clip.mp4/${segLine[0]}`);
+  assert.equal(castSeg.status, 200);
+  const maxAge = Number((castSeg.headers.get('cache-control') ?? '').match(/max-age=(\d+)/i)?.[1]);
+  const remain = payload.exp - Math.floor(Date.now() / 1000);
+  assert.equal(Number.isFinite(maxAge), true);
+  assert.ok(maxAge < 86400, 'cast segments must not outlive a shorter signature');
+  assert.ok(
+    Math.abs(maxAge - Math.max(0, Math.min(86400, remain))) <= 2,
+    `cast max-age ${maxAge} should track remaining exp (${remain})`
+  );
+});
+
+

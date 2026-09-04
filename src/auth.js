@@ -65,6 +65,101 @@ export function isAuthenticated(req) {
   return Boolean(req.signedCookies && req.signedCookies[COOKIE_NAME] === SESSION_VALUE);
 }
 
+// Cast-only PRD §8 exception: Chromecast-class Remote Playback cannot send
+// the HttpOnly sanem_session cookie. Short-lived HMAC-SHA256 query tokens
+// (exp + sig) authorize GET /api/media and GET /api/hls for one media path.
+// Minting still requires a logged-in session. Cookie-gated URLs remain the
+// on-device path. This is not a public catalog.
+//
+// TTL T3: when probe duration is known,
+//   min(12h, max(6h, duration + 2h));
+// when unknown, 6h. Absolute ceiling is 12h (never longer).
+// Signed with SANEM_SESSION_SECRET (same secret as cookies, distinct
+// message prefix so tokens are not interchangeable).
+export const CAST_TTL_MARGIN_SEC = 2 * 60 * 60;
+export const CAST_TTL_DEFAULT_SEC = 6 * 60 * 60;
+export const CAST_TTL_MAX_SEC = 12 * 60 * 60;
+const CAST_MSG_PREFIX = 'sanem-cast-v1';
+
+function canonicalMediaPath(mediaPath) {
+  return String(mediaPath ?? '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/g, '');
+}
+
+export function castTtlSeconds(durationSec) {
+  const d = Number(durationSec);
+  if (!Number.isFinite(d) || d <= 0) return CAST_TTL_DEFAULT_SEC;
+  return Math.min(CAST_TTL_MAX_SEC, Math.max(CAST_TTL_DEFAULT_SEC, Math.ceil(d) + CAST_TTL_MARGIN_SEC));
+}
+
+function hmacCast(kind, mediaPath, exp, secret = config.sessionSecret) {
+  const msg = `${CAST_MSG_PREFIX}\n${kind}\n${canonicalMediaPath(mediaPath)}\n${exp}`;
+  return crypto.createHmac('sha256', secret).update(msg, 'utf8').digest('base64url');
+}
+
+export function mintCastToken({ kind, mediaPath, durationSec, nowSec = Math.floor(Date.now() / 1000) }) {
+  if (kind !== 'media' && kind !== 'hls') throw new Error('invalid_kind');
+  const exp = nowSec + castTtlSeconds(durationSec);
+  return { exp, sig: hmacCast(kind, mediaPath, exp) };
+}
+
+export function verifyCastToken({
+  kind,
+  mediaPath,
+  exp,
+  sig,
+  nowSec = Math.floor(Date.now() / 1000),
+}) {
+  if (kind !== 'media' && kind !== 'hls') return false;
+  const expNum = Number.parseInt(String(exp ?? ''), 10);
+  if (!Number.isFinite(expNum) || expNum <= nowSec) return false;
+  if (typeof sig !== 'string' || sig.length < 16) return false;
+  const expected = hmacCast(kind, mediaPath, expNum);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+export function signedCastPath(kind, mediaPath, { exp, sig }) {
+  const encoded = canonicalMediaPath(mediaPath)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+  const q = `exp=${exp}&sig=${encodeURIComponent(sig)}`;
+  if (kind === 'hls') return `/api/hls/${encoded}/index.m3u8?${q}`;
+  return `/api/media/${encoded}?${q}`;
+}
+
+function queryOne(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+// Cookie session wins. Otherwise a valid, unexpired exp+sig for this
+// kind+path is accepted (cast fling). Invalid/expired signatures -> 401.
+export function requireSessionOrCastSig(getKindAndPath) {
+  return (req, res, next) => {
+    if (isAuthenticated(req)) return next();
+    let parsed;
+    try {
+      parsed = getKindAndPath(req);
+    } catch {
+      return res.status(401).json({ error: 'unauthenticated' });
+    }
+    const kind = parsed?.kind;
+    const mediaPath = parsed?.mediaPath;
+    const exp = queryOne(req.query?.exp);
+    const sig = queryOne(req.query?.sig);
+    if (verifyCastToken({ kind, mediaPath, exp, sig })) {
+      req.castQuery = { exp, sig };
+      return next();
+    }
+    return res.status(401).json({ error: 'unauthenticated' });
+  };
+}
+
 function setSessionCookie(res) {
   res.cookie(COOKIE_NAME, SESSION_VALUE, {
     httpOnly: true,

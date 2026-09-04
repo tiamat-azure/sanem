@@ -6,7 +6,10 @@
 // browser chrome). CSS overlay is the fallback when native rejects, is
 // missing, or is a no-op. CSS landscape rotate is overlay + portrait +
 // phone only — never rotate native fullscreen, and never rotate a
-// tall/narrow desktop window.
+// tall/narrow desktop window. Cast uses the W3C Remote Playback API on
+// video.remote (prompt / watchAvailability / statechange); no Cast SDK.
+// Offer cast only for a normal src URL (progressive / native HLS). Never
+// on the hls.js MSE/blob path.
 // Do not add is-fullscreen until native lands or overlay fallback applies:
 // the class sets aspect-ratio:auto; height:100% without position:fixed and
 // would collapse the player for ~400ms on no-op phones.
@@ -16,6 +19,46 @@ const WATCHED_PREFIX = 'sanem-watched:';
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 const BAR_HIDE_MS = 2000;
+
+function decodeCastSegment(seg) {
+  let cur = seg;
+  for (let i = 0; i < 4; i += 1) {
+    let next;
+    try {
+      next = decodeURIComponent(cur.replace(/\+/g, ' '));
+    } catch {
+      return null;
+    }
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return cur;
+}
+
+// Cast fling src must stay a same-origin relative /api/media|hls path with
+// exp+sig. Reject absolute, protocol-relative, `.`/`..` (including %2e),
+// empty segments, and missing query tokens.
+export function isAllowedCastSrc(url) {
+  if (typeof url !== 'string' || url.length === 0) return false;
+  if (!url.startsWith('/') || url.startsWith('//') || url.includes('\\')) return false;
+  const hashAt = url.indexOf('#');
+  const cut = hashAt === -1 ? url : url.slice(0, hashAt);
+  const qAt = cut.indexOf('?');
+  const path = qAt === -1 ? cut : cut.slice(0, qAt);
+  const query = qAt === -1 ? '' : cut.slice(qAt + 1);
+  if (!/^\/api\/(media|hls)\//.test(path)) return false;
+  const parts = path.split('/');
+  if (parts.length < 4 || parts[0] !== '') return false;
+  for (let i = 1; i < parts.length; i += 1) {
+    const raw = parts[i];
+    if (!raw) return false;
+    const decoded = decodeCastSegment(raw);
+    if (decoded == null || decoded === '' || decoded === '.' || decoded === '..') return false;
+    if (decoded.includes('/') || decoded.includes('\\')) return false;
+  }
+  const params = new URLSearchParams(query);
+  return Boolean(params.get('exp') && params.get('sig'));
+}
 
 const fmtTime = (s) => {
   if (!Number.isFinite(s) || s < 0) s = 0;
@@ -55,6 +98,31 @@ function el(tag, cls, attrs = {}) {
   if (cls) node.className = cls;
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
   return node;
+}
+
+// Chromecast/AirPlay-class glyph: a screen rectangle plus wireless arcs.
+function castIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.setAttribute('fill', 'currentColor');
+  const add = (d) => {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', d);
+    svg.appendChild(p);
+  };
+  add(
+    'M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z'
+  );
+  add(
+    'M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11z'
+  );
+  return svg;
+}
+
+function hasRemotePrompt(remote) {
+  return Boolean(remote && typeof remote.prompt === 'function');
 }
 
 /**
@@ -112,12 +180,21 @@ export function mountPlayer(root, { file, next, onNext }) {
   const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
   btnFull.textContent = '⛶';
 
+  const btnCast = el('button', 'ctl cast-btn', {
+    type: 'button',
+    'aria-label': 'Diffuser sur un écran',
+    title: 'Diffuser sur un écran',
+    hidden: '',
+    'aria-pressed': 'false',
+  });
+  btnCast.appendChild(castIcon());
+
   // Play/pause is the named Netflix-style center button, not a toolbar control.
   bar.append(progress, time, btnMute, volume, speed, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
 
-  container.append(video, touch, centerPlay, seekHint, nextOverlay, bar);
+  container.append(video, touch, centerPlay, seekHint, nextOverlay, bar, btnCast);
   root.appendChild(container);
 
   // --- source wiring ---
@@ -139,6 +216,9 @@ export function mountPlayer(root, { file, next, onNext }) {
       video.src = mediaUrl; // last resort
     }
   }
+  // Remote Playback needs a fetchable src URL. hls.js attachMedia drives MSE
+  // (blob:/MediaSource) which Chromecast/AirPlay cannot play; never offer it.
+  const mseHls = Boolean(hls);
 
   // --- restore volume / position ---
   const savedVol = Number(localStorage.getItem(VOLUME_KEY));
@@ -147,9 +227,23 @@ export function mountPlayer(root, { file, next, onNext }) {
   volume.value = String(video.muted ? 0 : video.volume);
 
   const resumeAt = loadPosition(file.path);
+  let resumeApplied = false;
+  let pendingSeek = null;
+  let pendingPlay = false;
+  const cookieSrc = video.getAttribute('src') || '';
   video.addEventListener('loadedmetadata', () => {
-    if (resumeAt > 0 && resumeAt < (video.duration || Infinity) - 5) {
+    const fromPending = pendingSeek;
+    pendingSeek = null;
+    if (fromPending != null && fromPending > 0 && fromPending < (video.duration || Infinity)) {
+      video.currentTime = fromPending;
+    } else if (!resumeApplied && resumeAt > 0 && resumeAt < (video.duration || Infinity) - 5) {
+      // pendingSeek 0 (or null) before the first resume must not skip loadPosition.
       video.currentTime = resumeAt;
+    }
+    resumeApplied = true;
+    if (pendingPlay) {
+      pendingPlay = false;
+      video.play().catch(() => {});
     }
     render();
   });
@@ -173,21 +267,23 @@ export function mountPlayer(root, { file, next, onNext }) {
   }
 
   let hideTimer = null;
-  let pointerInBar = false;
-  const barActivePointers = new Set();
-  const hoverHoldBar = () =>
+  let pointerInChrome = false;
+  const chromeActivePointers = new Set();
+  const hoverHoldChrome = (node) =>
     window.matchMedia('(hover: hover)').matches &&
     window.matchMedia('(pointer: fine)').matches &&
-    bar.matches(':hover');
-  // Mouse/pen hover or an active pointer on the bar holds controls-visible
-  // so the 2s timer cannot hide it under the cursor/finger.
-  const barHoldsVisible = () =>
-    pointerInBar ||
-    hoverHoldBar() ||
-    barActivePointers.size > 0 ||
-    (document.activeElement != null && bar.contains(document.activeElement));
+    node.matches(':hover');
+  // Mouse/pen hover or an active pointer on overlay chrome holds
+  // controls-visible so the 2s timer cannot hide it under the cursor/finger.
+  const chromeHoldsVisible = () =>
+    pointerInChrome ||
+    hoverHoldChrome(bar) ||
+    hoverHoldChrome(btnCast) ||
+    chromeActivePointers.size > 0 ||
+    (document.activeElement != null &&
+      (bar.contains(document.activeElement) || btnCast.contains(document.activeElement)));
   const hideBar = () => {
-    if (barHoldsVisible()) {
+    if (chromeHoldsVisible()) {
       // Keep re-arming so a hold that later releases (blur, pointerup)
       // still hides even if focusout/pointerleave did not restart showBar.
       clearTimeout(hideTimer);
@@ -198,11 +294,13 @@ export function mountPlayer(root, { file, next, onNext }) {
     clearTimeout(hideTimer);
     hideTimer = null;
     bar.inert = true;
-    // inert drops focus and tab order. Do not blur here: barHoldsVisible
+    btnCast.inert = true;
+    // inert drops focus and tab order. Do not blur here: chromeHoldsVisible
     // already keeps the bar up while it contains document.activeElement.
   };
   const showBar = () => {
     bar.inert = false;
+    btnCast.inert = false;
     container.classList.add('controls-visible');
     clearTimeout(hideTimer);
     hideTimer = null;
@@ -285,6 +383,171 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
   speed.addEventListener('change', () => {
     video.playbackRate = Number(speed.value);
+  });
+
+  // --- remote playback (W3C RemotePlayback on HTMLVideoElement.remote) ---
+  // Chromecast / AirPlay-class devices via the UA picker. No Cast SDK, no
+  // Presentation API. Firefox and other UAs without `remote` hide the button.
+  // Captain B: only when the <video> has a normal src URL (direct or native
+  // HLS). hls.js MSE/blob never gets a cast control.
+  let remoteWatchId = null;
+  let remoteWatchPending = null;
+  let lastAvailable = false;
+  let castAlive = true;
+  let remoteCancelRequested = false;
+  let castSrcActive = false;
+  let castUrlCache = null;
+  const remote = !mseHls && hasRemotePrompt(video.remote) ? video.remote : null;
+  const isCastLive = () =>
+    Boolean(remote && (remote.state === 'connected' || remote.state === 'connecting'));
+  const stopRemotePlayback = () => {
+    if (remoteCancelRequested || !remote) return;
+    if (remote.state !== 'connected' && remote.state !== 'connecting') return;
+    remoteCancelRequested = true;
+    try {
+      Promise.resolve(remote.cancel()).catch(() => {});
+    } catch {
+      // Some UAs have no cancel(); teardown must still clear src.
+    }
+  };
+  const restoreCookieSrc = () => {
+    if (!castSrcActive) return;
+    castSrcActive = false;
+    if (!cookieSrc) return;
+    if ((video.getAttribute('src') || '') === cookieSrc) return;
+    // applySignedSrc already captured seek/play. Assigning video.src resets
+    // currentTime to 0 before metadata; overwriting here would jump to the
+    // start on a fast picker cancel. Resample only after loadedmetadata
+    // consumed that capture (pendingSeek is then null).
+    if (pendingSeek == null) {
+      pendingSeek = video.currentTime || 0;
+      pendingPlay = !video.paused;
+    }
+    video.src = cookieSrc;
+  };
+  const promptRemote = () => {
+    if (!hasRemotePrompt(video.remote)) return Promise.resolve();
+    return Promise.resolve(video.remote.prompt()).then(
+      () => {
+        // Some UAs fulfill prompt() on picker dismiss and never fire
+        // statechange. If we are still not connecting/connected, put the
+        // cookie-gated src back immediately.
+        if (castAlive && !isCastLive()) restoreCookieSrc();
+      },
+      () => {
+        // Picker cancel/reject: restore only when not connecting/connected.
+        // Click-while-live also uses prompt(); a reject must not yank src
+        // off an active session.
+        if (castAlive && !isCastLive()) restoreCookieSrc();
+      }
+    );
+  };
+  const beginCastWithUrl = (url) => {
+    if (!url || !castAlive || mseHls) return Promise.resolve();
+    if (!isAllowedCastSrc(url)) return Promise.resolve();
+    applySignedSrc(url);
+    return promptRemote();
+  };
+  const applySignedSrc = (url) => {
+    if (!isAllowedCastSrc(url)) return;
+    if ((video.getAttribute('src') || '') === url) {
+      castSrcActive = true;
+      return;
+    }
+    pendingSeek = video.currentTime || 0;
+    pendingPlay = !video.paused;
+    video.src = url;
+    castSrcActive = true;
+  };
+  const refreshCastUrl = () => {
+    if (!castAlive || mseHls || !cookieSrc) {
+      castUrlCache = null;
+      btnCast.removeAttribute('data-cast-ready');
+      return Promise.resolve(null);
+    }
+    const kind = cookieSrc.includes('/api/hls/') ? 'hls' : 'media';
+    const pathEnc = file.path.split('/').map(encodeURIComponent).join('/');
+    return fetch(`/api/cast-url/${pathEnc}?kind=${kind}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('cast-url failed'))))
+      .then((body) => {
+        if (!castAlive) return null;
+        if (!body?.url || !body.exp) throw new Error('cast-url missing');
+        if (!isAllowedCastSrc(body.url)) throw new Error('cast-url rejected');
+        castUrlCache = { url: body.url, exp: Number(body.exp) };
+        btnCast.setAttribute('data-cast-ready', '1');
+        return castUrlCache.url;
+      })
+      .catch(() => {
+        if (!castAlive) return null;
+        castUrlCache = null;
+        btnCast.removeAttribute('data-cast-ready');
+        return null;
+      });
+  };
+  // One helper for statechange and availability: stay visible while live,
+  // otherwise honor the last watchAvailability result (hide when no devices).
+  const syncCastUi = () => {
+    if (!castAlive) return;
+    if (mseHls || !remote) {
+      btnCast.hidden = true;
+      btnCast.classList.remove('is-casting');
+      btnCast.setAttribute('aria-pressed', 'false');
+      return;
+    }
+    const live = isCastLive();
+    btnCast.classList.toggle('is-casting', live);
+    btnCast.setAttribute('aria-pressed', live ? 'true' : 'false');
+    btnCast.hidden = !(lastAvailable || live);
+  };
+  const applyCastAvailability = (available) => {
+    if (!castAlive || mseHls) return;
+    lastAvailable = Boolean(available);
+    syncCastUi();
+    if (available) refreshCastUrl();
+  };
+  const onRemoteState = () => {
+    syncCastUi();
+    if (!isCastLive()) restoreCookieSrc();
+  };
+  if (remote) {
+    remote.addEventListener('statechange', onRemoteState);
+    syncCastUi();
+    if (typeof remote.watchAvailability === 'function') {
+      remoteWatchPending = Promise.resolve()
+        .then(() => remote.watchAvailability(applyCastAvailability))
+        .then((id) => {
+          remoteWatchId = id;
+          return id;
+        })
+        .catch(() => {
+          if (!castAlive || mseHls) return;
+          // UA cannot monitor devices in the background (W3C): still offer
+          // prompt() so the picker can discover them on a user gesture.
+          applyCastAvailability(true);
+        });
+    } else {
+      applyCastAvailability(true);
+    }
+  } else {
+    btnCast.hidden = true;
+  }
+  btnCast.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!castAlive || mseHls) return;
+    if (!hasRemotePrompt(video.remote)) return;
+    if (isCastLive()) {
+      promptRemote();
+      return;
+    }
+    // Always mint on the user gesture so a hours-old prefetch cannot start
+    // a session with ~1 minute of signature life left (HLS segs would 401).
+    refreshCastUrl().then((url) => {
+      if (!url || !castAlive) return;
+      return beginCastWithUrl(url);
+    });
   });
 
   // --- progress bar scrubbing ---
@@ -703,41 +966,45 @@ export function mountPlayer(root, { file, next, onNext }) {
   container.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'mouse') showBar();
   });
-  bar.addEventListener('pointerdown', (e) => {
-    barActivePointers.add(e.pointerId);
-    showBar();
-  });
-  bar.addEventListener('pointermove', (e) => {
-    if (barActivePointers.has(e.pointerId) || e.buttons) showBar();
-  });
-  const onBarPointerEnd = (e) => {
-    if (!barActivePointers.has(e.pointerId)) return;
-    barActivePointers.delete(e.pointerId);
+  const bindChromeHold = (node) => {
+    node.addEventListener('pointerdown', (e) => {
+      chromeActivePointers.add(e.pointerId);
+      showBar();
+    });
+    node.addEventListener('pointermove', (e) => {
+      if (chromeActivePointers.has(e.pointerId) || e.buttons) showBar();
+    });
+    node.addEventListener('pointerenter', (e) => {
+      if (e.pointerType === 'touch') return;
+      pointerInChrome = true;
+      showBar();
+    });
+    node.addEventListener('pointerleave', (e) => {
+      if (e.pointerType === 'touch') return;
+      pointerInChrome = false;
+      showBar();
+    });
+    node.addEventListener('focusin', () => showBar());
+    node.addEventListener('focusout', () => {
+      window.queueMicrotask(() => showBar());
+    });
+    node.addEventListener('keydown', () => showBar());
+  };
+  bindChromeHold(bar);
+  bindChromeHold(btnCast);
+  const onChromePointerEnd = (e) => {
+    if (!chromeActivePointers.has(e.pointerId)) return;
+    chromeActivePointers.delete(e.pointerId);
     showBar();
   };
   const stopHoldSeeks = [];
   const onHoldPointerEnds = [];
   const onDocPointerEnd = (e) => {
-    onBarPointerEnd(e);
+    onChromePointerEnd(e);
     for (const fn of onHoldPointerEnds) fn(e);
   };
   document.addEventListener('pointerup', onDocPointerEnd);
   document.addEventListener('pointercancel', onDocPointerEnd);
-  bar.addEventListener('pointerenter', (e) => {
-    if (e.pointerType === 'touch') return;
-    pointerInBar = true;
-    showBar();
-  });
-  bar.addEventListener('pointerleave', (e) => {
-    if (e.pointerType === 'touch') return;
-    pointerInBar = false;
-    showBar();
-  });
-  bar.addEventListener('focusin', () => showBar());
-  bar.addEventListener('focusout', () => {
-    window.queueMicrotask(() => showBar());
-  });
-  bar.addEventListener('keydown', () => showBar());
 
   // --- touch zones: pointerdown/up, not click ---
   function bindThird(node, dir) {
@@ -892,6 +1159,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   });
 
   function cleanup() {
+    castAlive = false;
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('fullscreenchange', onFsChange);
     document.removeEventListener('webkitfullscreenchange', onFsChange);
@@ -905,6 +1173,18 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (hls) {
       hls.destroy();
       hls = null;
+    }
+    if (remote) {
+      stopRemotePlayback();
+      remote.removeEventListener('statechange', onRemoteState);
+      const cancelWatch = (id) => {
+        if (id == null || typeof remote.cancelWatchAvailability !== 'function') return;
+        Promise.resolve(remote.cancelWatchAvailability(id)).catch(() => {});
+      };
+      cancelWatch(remoteWatchId);
+      if (remoteWatchPending) {
+        remoteWatchPending.then((id) => cancelWatch(id)).catch(() => {});
+      }
     }
     video.removeAttribute('src');
     video.load();

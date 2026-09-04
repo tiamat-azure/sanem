@@ -15,7 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { Router } from 'express';
-import { requireSession } from './auth.js';
+import { requireSessionOrCastSig } from './auth.js';
 import { config } from './config.js';
 import { resolveReadPath } from './filename.js';
 
@@ -350,7 +350,7 @@ async function loadOrBuildPlan(relPath, abs, info) {
   return plan;
 }
 
-function playlistText(plan) {
+function playlistText(plan, segmentQuery = '') {
   const target = Math.ceil(Math.max(1, ...plan.map((s) => s.dur)));
   const lines = [
     '#EXTM3U',
@@ -361,7 +361,7 @@ function playlistText(plan) {
   ];
   plan.forEach((seg, i) => {
     lines.push(`#EXTINF:${seg.dur.toFixed(3)},`);
-    lines.push(`seg-${i}.ts`);
+    lines.push(`seg-${i}.ts${segmentQuery}`);
   });
   lines.push('#EXT-X-ENDLIST');
   return lines.join('\n') + '\n';
@@ -459,7 +459,15 @@ async function resolveHlsMedia(splat) {
 
 export const hlsRouter = Router();
 
-hlsRouter.get('/hls/*splat', requireSession, async (req, res) => {
+function hlsKindAndPath(req) {
+  const raw = req.params.splat;
+  const splat = Array.isArray(raw) ? raw.join('/') : String(raw ?? '');
+  const parts = splat.split('/');
+  parts.pop();
+  return { kind: 'hls', mediaPath: parts.join('/') };
+}
+
+hlsRouter.get('/hls/*splat', requireSessionOrCastSig(hlsKindAndPath), async (req, res) => {
   let media;
   try {
     media = await resolveHlsMedia(req.params.splat);
@@ -487,7 +495,14 @@ hlsRouter.get('/hls/*splat', requireSession, async (req, res) => {
     markPlayed(relativePath);
     res.type('application/vnd.apple.mpegurl');
     res.set('Cache-Control', 'private, max-age=30');
-    return res.send(playlistText(plan));
+    // Segment URIs include ?exp&sig only on the cast-auth path. Cookie vs
+    // cookieless clients must not share a cached playlist.
+    res.set('Vary', 'Cookie');
+    const q = req.castQuery;
+    const segmentQuery = q
+      ? `?exp=${encodeURIComponent(q.exp)}&sig=${encodeURIComponent(q.sig)}`
+      : '';
+    return res.send(playlistText(plan, segmentQuery));
   }
 
   const match = /^seg-(\d+)\.ts$/.exec(resource);
@@ -503,7 +518,13 @@ hlsRouter.get('/hls/*splat', requireSession, async (req, res) => {
     const segPath = await ensureSegment(relativePath, abs, info, plan, index, ac.signal);
     if (res.writableEnded || ac.signal.aborted) return undefined;
     res.type('video/mp2t');
-    res.set('Cache-Control', 'private, max-age=86400');
+    let maxAge = 86400;
+    if (req.castQuery) {
+      const exp = Number.parseInt(String(req.castQuery.exp), 10);
+      const remain = Number.isFinite(exp) ? exp - Math.floor(Date.now() / 1000) : 0;
+      maxAge = Math.max(0, Math.min(86400, remain));
+    }
+    res.set('Cache-Control', `private, max-age=${maxAge}`);
     return res.sendFile(segPath);
   } catch {
     if (!res.headersSent) return res.status(ac.signal.aborted ? 499 : 500).end();

@@ -33,6 +33,7 @@ export default [
         localStorage: 'readonly',
         fetch: 'readonly',
         Image: 'readonly',
+        URLSearchParams: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',

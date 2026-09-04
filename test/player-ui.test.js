@@ -12,6 +12,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { isAllowedCastSrc } from '../public/player.js';
 
 const PASSWORD = 'integration-test-password';
 const SESSION_SECRET = 'integration-test-session-secret-at-least-32-chars';
@@ -63,7 +64,7 @@ async function waitForHttp(url, timeoutMs = 15000) {
   throw new Error(`did not become ready: ${url}`);
 }
 
-async function startServer(t) {
+async function startServer(t, { playback = 'direct' } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sanem-player-ui-'));
   const seriesDir = path.join(dataDir, 'uploads', 'Serie');
   await fs.mkdir(seriesDir, { recursive: true });
@@ -83,8 +84,8 @@ async function startServer(t) {
         size: stats.size,
         info: {
           kind: 'video',
-          playback: 'direct',
-          lane: 0,
+          playback,
+          lane: playback === 'direct' ? 0 : 1,
           duration: 2,
           width: 320,
           height: 180,
@@ -564,8 +565,112 @@ async function clickFullscreen(send) {
   );
 }
 
-async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH, blockAutoplay = false } = {}) {
-  const { baseUrl } = await startServer(t);
+function remotePlaybackStubSource(options = {}) {
+  return `(function(){
+    const opts = ${JSON.stringify({
+      hasRemote: true,
+      available: true,
+      state: 'disconnected',
+      watchReject: false,
+      watchRejectDelayMs: 0,
+      promptReject: false,
+      promptRejectWhenLive: false,
+      promptDismiss: false,
+      ...options,
+    })};
+    window.__remotePrompts = 0;
+    window.__remoteWatchCalls = 0;
+    window.__remoteCancels = 0;
+    window.__remoteFakes = [];
+    window.__setRemoteAvailable = (available) => {
+      for (const remote of window.__remoteFakes) {
+        for (const cb of remote._cbs) cb(Boolean(available));
+      }
+    };
+    const remotes = new WeakMap();
+    class FakeRemote extends EventTarget {
+      constructor() {
+        super();
+        this.state = opts.state;
+        this._cbs = [];
+        window.__remoteFakes.push(this);
+      }
+      watchAvailability(cb) {
+        window.__remoteWatchCalls += 1;
+        if (opts.watchReject) {
+          const err = Object.assign(new Error('NotSupportedError'), { name: 'NotSupportedError' });
+          const delay = Number(opts.watchRejectDelayMs) || 0;
+          if (delay <= 0) return Promise.reject(err);
+          return new Promise((_, reject) => {
+            setTimeout(() => reject(err), delay);
+          });
+        }
+        this._cbs.push(cb);
+        queueMicrotask(() => cb(Boolean(opts.available)));
+        return Promise.resolve(1);
+      }
+      cancelWatchAvailability() {
+        this._cbs = [];
+        return Promise.resolve();
+      }
+      prompt() {
+        window.__remotePrompts += 1;
+        if (opts.promptReject) {
+          return Promise.reject(Object.assign(new Error('NotFoundError'), { name: 'NotFoundError' }));
+        }
+        if (opts.promptRejectWhenLive && (this.state === 'connected' || this.state === 'connecting')) {
+          // Picker cancel while live: reject, leave state unchanged, no statechange.
+          return Promise.reject(Object.assign(new Error('AbortError'), { name: 'AbortError' }));
+        }
+        if (opts.promptDismiss) {
+          // Picker dismissed: promise fulfills, state stays disconnected,
+          // no statechange (the UA path this stub models).
+          return Promise.resolve();
+        }
+        if (this.state === 'disconnected') this.state = 'connected';
+        else this.state = 'disconnected';
+        this.dispatchEvent(new Event('statechange'));
+        return Promise.resolve();
+      }
+      cancel() {
+        window.__remoteCancels += 1;
+        if (this.state === 'disconnected') return Promise.resolve();
+        this.state = 'disconnected';
+        this.dispatchEvent(new Event('statechange'));
+        return Promise.resolve();
+      }
+    }
+    Object.defineProperty(HTMLVideoElement.prototype, 'remote', {
+      configurable: true,
+      get() {
+        if (!opts.hasRemote) return undefined;
+        let remote = remotes.get(this);
+        if (!remote) {
+          remote = new FakeRemote();
+          remotes.set(this, remote);
+        }
+        return remote;
+      },
+    });
+  })();`;
+}
+
+async function openPlayer(
+  t,
+  viewport,
+  {
+    phone = true,
+    playPath = PLAY_PATH,
+    blockAutoplay = false,
+    remotePlayback,
+    playback = 'direct',
+    hlsMode,
+    failCastUrl = false,
+    slowCastUrlMs = 0,
+    spoofCastUrl,
+  } = {}
+) {
+  const { baseUrl } = await startServer(t, { playback });
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
   if (phone) await setPhoneViewport(send, viewport);
@@ -577,6 +682,87 @@ async function openPlayer(t, viewport, { phone = true, playPath = PLAY_PATH, blo
     httpOnly: true,
     path: '/',
   });
+  if (remotePlayback) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: remotePlaybackStubSource(remotePlayback),
+    });
+  }
+  if (hlsMode === 'mse' || hlsMode === 'native') {
+    const native = hlsMode === 'native';
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = HTMLVideoElement.prototype.canPlayType;
+        HTMLVideoElement.prototype.canPlayType = function(type) {
+          if (/mpegurl/i.test(String(type))) return ${native ? "'maybe'" : "''"};
+          return orig.call(this, type);
+        };
+      })();`,
+    });
+  }
+  if (failCastUrl) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        window.fetch = function(input, init) {
+          const url = String(input);
+          if (url.includes('/api/cast-url')) {
+            return Promise.resolve(new Response('{"error":"fail"}', {
+              status: 502,
+              headers: { 'Content-Type': 'application/json' },
+            }));
+          }
+          return orig(input, init);
+        };
+      })();`,
+    });
+  }
+  if (spoofCastUrl) {
+    const spoof = String(spoofCastUrl);
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        const spoof = ${JSON.stringify(spoof)};
+        window.fetch = function(input, init) {
+          const url = String(input);
+          if (!url.includes('/api/cast-url')) return orig(input, init);
+          const exp = Math.floor(Date.now() / 1000) + 3600;
+          return Promise.resolve(new Response(JSON.stringify({ url: spoof, exp }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }));
+        };
+      })();`,
+    });
+  }
+  if (slowCastUrlMs > 0) {
+    const delay = Number(slowCastUrlMs);
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        window.fetch = function(input, init) {
+          const url = String(input);
+          if (!url.includes('/api/cast-url')) return orig(input, init);
+          return new Promise((resolve, reject) => {
+            setTimeout(() => orig(input, init).then(resolve, reject), ${delay});
+          });
+        };
+      })();`,
+    });
+  }
+  if (remotePlayback) {
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = window.fetch.bind(window);
+        window.__castUrlFetchCache = [];
+        window.fetch = function(input, init) {
+          if (String(input).includes('/api/cast-url')) {
+            window.__castUrlFetchCache.push((init && init.cache) || null);
+          }
+          return orig(input, init);
+        };
+      })();`,
+    });
+  }
   if (blockAutoplay) {
     await send('Page.addScriptToEvaluateOnNewDocument', {
       source: `(function(){
@@ -662,6 +848,42 @@ const SNAPSHOT = `({
     };
   })(),
   viewport: { w: window.innerWidth, h: window.innerHeight, portrait: window.matchMedia('(orientation: portrait)').matches },
+  remotePrompts: window.__remotePrompts ?? 0,
+  remoteWatchCalls: window.__remoteWatchCalls ?? 0,
+  remoteCancels: window.__remoteCancels ?? 0,
+  castReady: document.querySelector('.cast-btn')?.getAttribute('data-cast-ready') ?? null,
+  videoSrc: document.querySelector('video')?.getAttribute('src') ?? '',
+  menuBtn: (() => {
+    const el = document.getElementById('app-menu-button');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  })(),
+  cast: (() => {
+    const el = document.querySelector('.cast-btn');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+      hidden: el.hidden,
+      label: el.getAttribute('aria-label'),
+      title: el.getAttribute('title'),
+      pressed: el.getAttribute('aria-pressed'),
+      casting: el.classList.contains('is-casting'),
+      opacity: cs.opacity,
+      pointerEvents: cs.pointerEvents,
+      inert: Boolean(el.inert),
+      display: cs.display,
+      x: r.x,
+      y: r.y,
+      w: r.width,
+      h: r.height,
+      left: r.left,
+      right: r.right,
+      top: r.top,
+      bottom: r.bottom,
+    };
+  })(),
 })`;
 
 uiTest('player UI on a smartphone portrait viewport', async (t) => {
@@ -1830,3 +2052,601 @@ uiTest('narrow desktop overlay fallback does not CSS-rotate', async (t) => {
   assert.ok(Math.abs(ui.player.h - ui.viewport.h) < 8, `overlay height ${ui.player.h} vs ${ui.viewport.h}`);
   assert.ok(ui.player.h > ui.player.w, 'desktop overlay stays portrait, not rotated onto the long edge');
 });
+
+function rectsOverlap(a, b, gap = 0) {
+  return (
+    a.left < b.right + gap &&
+    a.right + gap > b.left &&
+    a.top < b.bottom + gap &&
+    a.bottom + gap > b.top
+  );
+}
+
+async function waitCastReady(send) {
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready") === "1"');
+}
+
+uiTest('cast button is hidden when Remote Playback is unsupported', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { hasRemote: false } }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".cast-btn"))');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, true);
+  assert.equal(ui.cast.display, 'none');
+  assert.equal(ui.remotePrompts, 0);
+});
+
+uiTest('cast button is hidden when watchAvailability reports no devices', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: false } }
+  );
+  await waitFor(send, '(window.__remoteWatchCalls ?? 0) >= 1');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, true);
+  assert.equal(ui.cast.display, 'none');
+  assert.equal(ui.remotePrompts, 0, 'prompt must not run just because the player mounted');
+});
+
+uiTest('cast button is shown when watchAvailability cannot monitor devices', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { watchReject: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, false);
+  assert.equal(ui.cast.label, 'Diffuser sur un écran');
+  assert.equal(ui.controlsVisible, true);
+  assert.notEqual(ui.cast.opacity, '0');
+});
+
+uiTest('cast button follows overlay chrome and sits in the video top-right', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true);
+  assert.equal(ui.cast.hidden, false);
+  assert.equal(ui.cast.label, 'Diffuser sur un écran');
+  assert.equal(ui.cast.title, 'Diffuser sur un écran');
+  assert.equal(ui.cast.pressed, 'false');
+  assert.notEqual(ui.cast.opacity, '0');
+  assert.notEqual(ui.cast.pointerEvents, 'none');
+  assert.ok(ui.cast.w >= 44, `cast target too small: ${ui.cast.w}`);
+  assert.ok(ui.cast.h >= 44, `cast target too small: ${ui.cast.h}`);
+  assert.ok(ui.cast.y >= ui.player.y - 1, 'cast must sit inside the video frame');
+  assert.ok(ui.cast.top - ui.player.y < 48, 'cast must be near the top of the video');
+  assert.ok(ui.player.x + ui.player.w - ui.cast.right < 48, 'cast must be near the right of the video');
+  assert.equal(rectsOverlap(ui.cast, ui.menuBtn), false, 'cast must not collide with the hamburger');
+
+  await loopAndPlay(send);
+  await waitFor(
+    send,
+    `(function(){
+      const root = document.querySelector('.player-container');
+      const el = document.querySelector('.cast-btn');
+      if (!root || !el || root.classList.contains('controls-visible')) return false;
+      const cs = getComputedStyle(el);
+      return cs.opacity === '0' && cs.pointerEvents === 'none';
+    })()`,
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false);
+  assert.equal(ui.cast.hidden, false, 'availability stays true while chrome hides');
+  assert.equal(ui.cast.opacity, '0');
+  assert.equal(ui.cast.pointerEvents, 'none');
+  assert.equal(ui.cast.inert, true);
+  assert.equal(ui.paused, false);
+});
+
+uiTest('cast prompt is only opened from a user gesture', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 0, 'prompt must wait for a click/tap');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true);
+  await waitCastReady(send);
+  const mintCaches = await evaluate(send, 'window.__castUrlFetchCache');
+  assert.ok(Array.isArray(mintCaches) && mintCaches.length >= 1, 'mint fetch must have run');
+  assert.ok(
+    mintCaches.every((c) => c === 'no-store'),
+    `cast-url fetch must use cache: no-store, got ${JSON.stringify(mintCaches)}`
+  );
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(send, '(window.__castUrlFetchCache || []).length >= 2');
+  const afterClick = await evaluate(send, 'window.__castUrlFetchCache');
+  assert.ok(
+    afterClick.length > mintCaches.length,
+    'non-live click must refresh the mint, not reuse a prefetch with a 60s floor'
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.match(ui.videoSrc, /[?&]exp=/);
+  assert.match(ui.videoSrc, /[?&]sig=/);
+});
+
+uiTest('cast button reflects connected state and does not pause playback', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.equal(ui.paused, false, 'casting must not click-through to pause the surface');
+  assert.equal(ui.cast.pressed, 'true');
+  assert.equal(ui.cast.casting, true);
+  assert.equal(ui.cast.hidden, false);
+  await clickSelector(send, '.cast-btn');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 2);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.equal(ui.cast.casting, false);
+  await waitFor(send, 'Boolean(document.querySelector("video") && !document.querySelector("video").paused)');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false);
+});
+
+uiTest('prompt reject while connected keeps the signed src', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true, promptRejectWhenLive: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.match(ui.videoSrc, /[?&]sig=/);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 2');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 2);
+  assert.equal(ui.cast.pressed, 'true', 'reject while live must not disconnect');
+  assert.equal(ui.cast.casting, true);
+  assert.match(ui.videoSrc, /[?&]sig=/, 'must not restore cookie src while still connected');
+});
+
+uiTest('cast button hides after disconnect if devices disappeared while live', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.pressed, 'true');
+  assert.equal(ui.cast.hidden, false);
+  await evaluate(send, 'window.__setRemoteAvailable(false)');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, false, 'stay visible while still connected even if devices drop');
+  assert.equal(ui.cast.pressed, 'true');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.equal(ui.cast.hidden, true, 'disconnect must re-apply last watchAvailability (no devices)');
+});
+
+uiTest('late watchAvailability reject after destroy does not unhide a stale cast button', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { watchReject: true, watchRejectDelayMs: 400 } }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".cast-btn"))');
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.cast.hidden, true, 'button starts hidden until watchAvailability settles');
+  await evaluate(send, 'window.__oldCast = document.querySelector(".cast-btn")');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await new Promise((r) => setTimeout(r, 600));
+  const staleHidden = await evaluate(send, 'Boolean(window.__oldCast?.hidden)');
+  assert.equal(staleHidden, true, 'destroyed player must ignore a late watchAvailability reject');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.cast, 'new player still has a cast control');
+});
+
+uiTest('cast button is not offered on the hls.js MSE path', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playback: 'hls', hlsMode: 'mse', remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".cast-btn"))');
+  await new Promise((r) => setTimeout(r, 200));
+  const info = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      const src = v.getAttribute('src') || v.src || '';
+      return {
+        hidden: document.querySelector('.cast-btn')?.hidden ?? null,
+        watches: window.__remoteWatchCalls ?? 0,
+        prompts: window.__remotePrompts ?? 0,
+        src,
+        nativeHls: v.canPlayType('application/vnd.apple.mpegurl'),
+        hlsSupported: Boolean(window.Hls && window.Hls.isSupported()),
+      };
+    })()`
+  );
+  assert.equal(info.nativeHls, '', 'test must force the non-native HLS branch');
+  assert.equal(info.hlsSupported, true, 'hls.js must be the MSE driver');
+  assert.equal(info.hidden, true, 'MSE/blob playback must not offer cast');
+  assert.equal(info.watches, 0, 'must not watchAvailability on the hls.js path');
+  assert.equal(info.prompts, 0);
+  const mseReady = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
+  assert.equal(mseReady, null, 'MSE path must not mint a cast URL');
+});
+
+uiTest('cast button is offered for native HLS src URL', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playback: 'hls', hlsMode: 'native', remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await waitCastReady(send);
+  const info = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      const src = v.getAttribute('src') || '';
+      return {
+        hidden: document.querySelector('.cast-btn')?.hidden ?? null,
+        watches: window.__remoteWatchCalls ?? 0,
+        src,
+        nativeHls: v.canPlayType('application/vnd.apple.mpegurl'),
+      };
+    })()`
+  );
+  assert.equal(info.nativeHls, 'maybe');
+  assert.match(info.src, /\/api\/hls\//);
+  assert.equal(info.hidden, false, 'native HLS src URL may offer Remote Playback');
+  assert.ok(info.watches >= 1);
+});
+
+uiTest('teardown cancels an active Remote Playback session once', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitCastReady(send);
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
+  const before = await evaluate(send, 'window.__remoteCancels ?? 0');
+  assert.equal(before, 0, 'cancel must not run just because a session connected');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  const cancels = await evaluate(send, 'window.__remoteCancels ?? 0');
+  assert.equal(cancels, 1, 'goNext/cleanup must cancel a live session once, not twice');
+});
+
+uiTest('cast prompt is skipped when signed URL mint fails', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true }, failCastUrl: true }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await new Promise((r) => setTimeout(r, 250));
+  const ready = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
+  assert.equal(ready, null);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await new Promise((r) => setTimeout(r, 200));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 0, 'must not prompt with a cookie URL when mint fails');
+  assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+});
+
+uiTest('prompt cancel restores the cookie-gated src', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true, promptReject: true } }
+  );
+  await waitCastReady(send);
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.loop = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = 0.8;
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(send, '(document.querySelector("video")?.currentTime || 0) >= 0.5');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      const src = v?.getAttribute('src') || '';
+      if (!src.includes('/api/media/') || /[?&]sig=/.test(src)) return false;
+      return (v.currentTime || 0) >= 0.5;
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.match(ui.videoSrc, /\/api\/media\//);
+  assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+  assert.equal(ui.paused, false, 'pendingPlay from applySignedSrc must survive picker cancel');
+});
+
+uiTest('prompt fulfill while disconnected restores the cookie-gated src', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true, promptDismiss: true } }
+  );
+  await waitCastReady(send);
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  await waitFor(
+    send,
+    `(function(){
+      const src = document.querySelector('video')?.getAttribute('src') || '';
+      return src.includes('/api/media/') && !/[?&]sig=/.test(src);
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 1);
+  assert.equal(ui.cast.pressed, 'false');
+  assert.match(ui.videoSrc, /\/api\/media\//);
+  assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+});
+
+uiTest('cast click still prompts after an in-flight mint', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true }, slowCastUrlMs: 2000 }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  const readyBefore = await evaluate(
+    send,
+    'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")'
+  );
+  assert.equal(readyBefore, null, 'click before prefetch must exercise the refresh chain');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.remotePrompts >= 1, 'same gesture must prompt once mint succeeds');
+  assert.match(ui.videoSrc, /[?&]sig=/);
+});
+
+test('cast src allowlist is same-origin relative /api/media or /api/hls only', () => {
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=1&sig=abc'), true);
+  assert.equal(isAllowedCastSrc('/api/hls/Serie/e01.mp4/index.m3u8?exp=1&sig=abc'), true);
+  assert.equal(isAllowedCastSrc('https://evil.example/api/media/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('http://127.0.0.1/api/media/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('//evil.example/api/media/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/\\/evil.example/api/media/x'), false);
+  assert.equal(isAllowedCastSrc('/api/download/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/thumbs/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/files/Serie/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc(''), false);
+  assert.equal(isAllowedCastSrc(null), false);
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4'), false, 'missing exp+sig');
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=1'), false, 'missing sig');
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?sig=abc'), false, 'missing exp');
+  assert.equal(isAllowedCastSrc('/api/media/Serie/e01.mp4?exp=&sig=abc'), false, 'empty exp');
+  assert.equal(isAllowedCastSrc('/api/media/../etc/passwd?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/foo/../../etc/passwd?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%2e%2e/etc/passwd?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%2E%2e/secret?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%252e%252e/secret?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/./e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media/%2e/e01.mp4?exp=1&sig=abc'), false);
+  assert.equal(isAllowedCastSrc('/api/media//e01.mp4?exp=1&sig=abc'), false, 'empty path segment');
+  assert.equal(isAllowedCastSrc('/api/hls/Serie/e01.mp4/%2e%2e/index.m3u8?exp=1&sig=abc'), false);
+});
+
+uiTest('hostile mint URL is not assigned and does not prompt', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    {
+      remotePlayback: { available: true },
+      spoofCastUrl: 'https://evil.example/api/media/Serie/e01.mp4',
+    }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await new Promise((r) => setTimeout(r, 250));
+  const ready = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
+  assert.equal(ready, null, 'rejected mint must not mark the button ready');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await new Promise((r) => setTimeout(r, 200));
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.remotePrompts, 0, 'must not prompt with a rejected cast URL');
+  assert.match(ui.videoSrc, /\/api\/media\//);
+  assert.doesNotMatch(ui.videoSrc, /evil\.example/);
+  assert.doesNotMatch(ui.videoSrc, /^https?:/i);
+  assert.doesNotMatch(ui.videoSrc, /^\/\//);
+});
+
+
+
+
+
+
+
