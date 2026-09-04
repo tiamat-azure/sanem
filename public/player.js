@@ -459,13 +459,6 @@ export function mountPlayer(root, { file, next, onNext }) {
     video.src = url;
     castSrcActive = true;
   };
-  const peekValidCastUrl = (minTtlSec = 60) => {
-    if (!castUrlCache?.url || !castUrlCache.exp) return null;
-    if (!isAllowedCastSrc(castUrlCache.url)) return null;
-    const now = Math.floor(Date.now() / 1000);
-    if (castUrlCache.exp - now < minTtlSec) return null;
-    return castUrlCache.url;
-  };
   const refreshCastUrl = () => {
     if (!castAlive || mseHls || !cookieSrc) {
       castUrlCache = null;
@@ -549,11 +542,8 @@ export function mountPlayer(root, { file, next, onNext }) {
       promptRemote();
       return;
     }
-    const signed = peekValidCastUrl();
-    if (signed) {
-      beginCastWithUrl(signed);
-      return;
-    }
+    // Always mint on the user gesture so a hours-old prefetch cannot start
+    // a session with ~1 minute of signature life left (HLS segs would 401).
     refreshCastUrl().then((url) => {
       if (!url || !castAlive) return;
       return beginCastWithUrl(url);

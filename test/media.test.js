@@ -81,6 +81,7 @@ async function startServer(t, { seedHls = false } = {}) {
       path.join(cacheDir, 'plan.json'),
       JSON.stringify({ mtimeMs: stats.mtimeMs, plan: [{ start: 0, dur: 2 }] })
     );
+    await fs.writeFile(path.join(cacheDir, 'seg-0.ts'), Buffer.from('ts'));
   }
 
   const child = spawn(process.execPath, [serverPath], {
@@ -322,6 +323,25 @@ test('HLS playlist sets Vary: Cookie so cast and cookie clients do not share cac
   const castBody = await castPl.text();
   assert.match(castBody, /seg-0\.ts\?exp=/);
   assert.match(castBody, /[?&]sig=/);
+
+  const cookieSeg = await fetch(`${baseUrl}/api/hls/clip.mp4/seg-0.ts`, {
+    headers: { Cookie: cookie },
+  });
+  assert.equal(cookieSeg.status, 200);
+  assert.match(cookieSeg.headers.get('cache-control') ?? '', /max-age=86400/i);
+
+  const segLine = castBody.match(/seg-0\.ts\?[^\r\n]+/);
+  assert.ok(segLine, 'cast playlist must list a signed segment URI');
+  const castSeg = await fetch(`${baseUrl}/api/hls/clip.mp4/${segLine[0]}`);
+  assert.equal(castSeg.status, 200);
+  const maxAge = Number((castSeg.headers.get('cache-control') ?? '').match(/max-age=(\d+)/i)?.[1]);
+  const remain = payload.exp - Math.floor(Date.now() / 1000);
+  assert.equal(Number.isFinite(maxAge), true);
+  assert.ok(maxAge < 86400, 'cast segments must not outlive a shorter signature');
+  assert.ok(
+    Math.abs(maxAge - Math.max(0, Math.min(86400, remain))) <= 2,
+    `cast max-age ${maxAge} should track remaining exp (${remain})`
+  );
 });
 
 

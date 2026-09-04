@@ -518,7 +518,13 @@ hlsRouter.get('/hls/*splat', requireSessionOrCastSig(hlsKindAndPath), async (req
     const segPath = await ensureSegment(relativePath, abs, info, plan, index, ac.signal);
     if (res.writableEnded || ac.signal.aborted) return undefined;
     res.type('video/mp2t');
-    res.set('Cache-Control', 'private, max-age=86400');
+    let maxAge = 86400;
+    if (req.castQuery) {
+      const exp = Number.parseInt(String(req.castQuery.exp), 10);
+      const remain = Number.isFinite(exp) ? exp - Math.floor(Date.now() / 1000) : 0;
+      maxAge = Math.max(0, Math.min(86400, remain));
+    }
+    res.set('Cache-Control', `private, max-age=${maxAge}`);
     return res.sendFile(segPath);
   } catch {
     if (!res.headersSent) return res.status(ac.signal.aborted ? 499 : 500).end();

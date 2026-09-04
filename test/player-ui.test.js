@@ -2181,6 +2181,12 @@ uiTest('cast prompt is only opened from a user gesture', async (t) => {
     `cast-url fetch must use cache: no-store, got ${JSON.stringify(mintCaches)}`
   );
   await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__castUrlFetchCache || []).length >= 2');
+  const afterClick = await evaluate(send, 'window.__castUrlFetchCache');
+  assert.ok(
+    afterClick.length > mintCaches.length,
+    'non-live click must refresh the mint, not reuse a prefetch with a 60s floor'
+  );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.remotePrompts, 1);
   assert.match(ui.videoSrc, /[?&]exp=/);
