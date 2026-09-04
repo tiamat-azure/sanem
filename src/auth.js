@@ -71,11 +71,14 @@ export function isAuthenticated(req) {
 // Minting still requires a logged-in session. Cookie-gated URLs remain the
 // on-device path. This is not a public catalog.
 //
-// TTL: duration + 2h when probe duration is known, otherwise 6h, always
-// capped at 6h. Signed with SANEM_SESSION_SECRET (same secret as cookies,
-// distinct message prefix so tokens are not interchangeable).
+// TTL T3: when probe duration is known,
+//   min(12h, max(6h, duration + 2h));
+// when unknown, 6h. Absolute ceiling is 12h (never longer).
+// Signed with SANEM_SESSION_SECRET (same secret as cookies, distinct
+// message prefix so tokens are not interchangeable).
 export const CAST_TTL_MARGIN_SEC = 2 * 60 * 60;
 export const CAST_TTL_DEFAULT_SEC = 6 * 60 * 60;
+export const CAST_TTL_MAX_SEC = 12 * 60 * 60;
 const CAST_MSG_PREFIX = 'sanem-cast-v1';
 
 function canonicalMediaPath(mediaPath) {
@@ -86,9 +89,8 @@ function canonicalMediaPath(mediaPath) {
 
 export function castTtlSeconds(durationSec) {
   const d = Number(durationSec);
-  const raw =
-    Number.isFinite(d) && d > 0 ? Math.ceil(d) + CAST_TTL_MARGIN_SEC : CAST_TTL_DEFAULT_SEC;
-  return Math.min(CAST_TTL_DEFAULT_SEC, Math.max(1, raw));
+  if (!Number.isFinite(d) || d <= 0) return CAST_TTL_DEFAULT_SEC;
+  return Math.min(CAST_TTL_MAX_SEC, Math.max(CAST_TTL_DEFAULT_SEC, Math.ceil(d) + CAST_TTL_MARGIN_SEC));
 }
 
 function hmacCast(kind, mediaPath, exp, secret = config.sessionSecret) {

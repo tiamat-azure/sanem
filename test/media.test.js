@@ -131,8 +131,14 @@ test('cast signer: valid token accepts, expired and wrong-id reject', async () =
   process.env.SANEM_PASSWORD = PASSWORD;
   process.env.SANEM_SESSION_SECRET = SESSION_SECRET;
   process.env.SANEM_DATA_DIR ??= os.tmpdir();
-  const { mintCastToken, verifyCastToken, castTtlSeconds, CAST_TTL_DEFAULT_SEC, CAST_TTL_MARGIN_SEC } =
-    await import('../src/auth.js');
+  const {
+    mintCastToken,
+    verifyCastToken,
+    castTtlSeconds,
+    CAST_TTL_DEFAULT_SEC,
+    CAST_TTL_MARGIN_SEC,
+    CAST_TTL_MAX_SEC,
+  } = await import('../src/auth.js');
   const nowSec = 1_700_000_000;
   const token = mintCastToken({
     kind: 'media',
@@ -140,7 +146,7 @@ test('cast signer: valid token accepts, expired and wrong-id reject', async () =
     durationSec: 90,
     nowSec,
   });
-  assert.equal(token.exp, nowSec + 90 + CAST_TTL_MARGIN_SEC);
+  assert.equal(token.exp, nowSec + CAST_TTL_DEFAULT_SEC, 'short title is floored at 6h');
   assert.equal(
     verifyCastToken({
       kind: 'media',
@@ -185,7 +191,15 @@ test('cast signer: valid token accepts, expired and wrong-id reject', async () =
     'wrong kind must reject'
   );
   assert.equal(castTtlSeconds(null), CAST_TTL_DEFAULT_SEC);
-  assert.equal(castTtlSeconds(10 * 3600), CAST_TTL_DEFAULT_SEC, 'TTL is capped at 6h');
+  assert.equal(castTtlSeconds(0), CAST_TTL_DEFAULT_SEC);
+  assert.equal(castTtlSeconds(90), CAST_TTL_DEFAULT_SEC, 'duration+2h below 6h still floors at 6h');
+  assert.equal(
+    castTtlSeconds(5 * 3600),
+    5 * 3600 + CAST_TTL_MARGIN_SEC,
+    '5h + 2h sits between the 6h floor and 12h ceiling'
+  );
+  assert.equal(castTtlSeconds(10 * 3600), CAST_TTL_MAX_SEC, '10h + 2h hits the 12h ceiling');
+  assert.equal(castTtlSeconds(15 * 3600), CAST_TTL_MAX_SEC, 'TTL is never longer than 12h');
 });
 
 test('signed cast media URL works without a session cookie; bad tokens 401', async (t) => {
