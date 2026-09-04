@@ -340,9 +340,20 @@ export function mountPlayer(root, { file, next, onNext }) {
   let remoteWatchPending = null;
   let lastAvailable = false;
   let castAlive = true;
+  let remoteCancelRequested = false;
   const remote = !mseHls && hasRemotePrompt(video.remote) ? video.remote : null;
   const isCastLive = () =>
     Boolean(remote && (remote.state === 'connected' || remote.state === 'connecting'));
+  const stopRemotePlayback = () => {
+    if (remoteCancelRequested || !remote) return;
+    if (remote.state !== 'connected' && remote.state !== 'connecting') return;
+    remoteCancelRequested = true;
+    try {
+      Promise.resolve(remote.cancel()).catch(() => {});
+    } catch {
+      // Some UAs have no cancel(); teardown must still clear src.
+    }
+  };
   // One helper for statechange and availability: stay visible while live,
   // otherwise honor the last watchAvailability result (hide when no devices).
   const syncCastUi = () => {
@@ -1018,6 +1029,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       hls = null;
     }
     if (remote) {
+      stopRemotePlayback();
       remote.removeEventListener('statechange', onRemoteState);
       const cancelWatch = (id) => {
         if (id == null || typeof remote.cancelWatchAvailability !== 'function') return;

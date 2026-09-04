@@ -577,6 +577,7 @@ function remotePlaybackStubSource(options = {}) {
     })};
     window.__remotePrompts = 0;
     window.__remoteWatchCalls = 0;
+    window.__remoteCancels = 0;
     window.__remoteFakes = [];
     window.__setRemoteAvailable = (available) => {
       for (const remote of window.__remoteFakes) {
@@ -616,6 +617,13 @@ function remotePlaybackStubSource(options = {}) {
         }
         if (this.state === 'disconnected') this.state = 'connected';
         else this.state = 'disconnected';
+        this.dispatchEvent(new Event('statechange'));
+        return Promise.resolve();
+      }
+      cancel() {
+        window.__remoteCancels += 1;
+        if (this.state === 'disconnected') return Promise.resolve();
+        this.state = 'disconnected';
         this.dispatchEvent(new Event('statechange'));
         return Promise.resolve();
       }
@@ -2241,5 +2249,37 @@ uiTest('cast button is offered for native HLS src URL', async (t) => {
   assert.equal(info.hidden, false, 'native HLS src URL may offer Remote Playback');
   assert.ok(info.watches >= 1);
 });
+
+uiTest('teardown cancels an active Remote Playback session once', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await clickSelector(send, '.cast-btn');
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
+  const before = await evaluate(send, 'window.__remoteCancels ?? 0');
+  assert.equal(before, 0, 'cancel must not run just because a session connected');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  const cancels = await evaluate(send, 'window.__remoteCancels ?? 0');
+  assert.equal(cancels, 1, 'goNext/cleanup must cancel a live session once, not twice');
+});
+
 
 
