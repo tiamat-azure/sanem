@@ -63,7 +63,7 @@ async function waitForHttp(url, timeoutMs = 15000) {
   throw new Error(`did not become ready: ${url}`);
 }
 
-async function startServer(t) {
+async function startServer(t, { playback = 'direct' } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sanem-player-ui-'));
   const seriesDir = path.join(dataDir, 'uploads', 'Serie');
   await fs.mkdir(seriesDir, { recursive: true });
@@ -83,8 +83,8 @@ async function startServer(t) {
         size: stats.size,
         info: {
           kind: 'video',
-          playback: 'direct',
-          lane: 0,
+          playback,
+          lane: playback === 'direct' ? 0 : 1,
           duration: 2,
           width: 320,
           height: 180,
@@ -638,9 +638,16 @@ function remotePlaybackStubSource(options = {}) {
 async function openPlayer(
   t,
   viewport,
-  { phone = true, playPath = PLAY_PATH, blockAutoplay = false, remotePlayback } = {}
+  {
+    phone = true,
+    playPath = PLAY_PATH,
+    blockAutoplay = false,
+    remotePlayback,
+    playback = 'direct',
+    hlsMode,
+  } = {}
 ) {
-  const { baseUrl } = await startServer(t);
+  const { baseUrl } = await startServer(t, { playback });
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
   if (phone) await setPhoneViewport(send, viewport);
@@ -655,6 +662,18 @@ async function openPlayer(
   if (remotePlayback) {
     await send('Page.addScriptToEvaluateOnNewDocument', {
       source: remotePlaybackStubSource(remotePlayback),
+    });
+  }
+  if (hlsMode === 'mse' || hlsMode === 'native') {
+    const native = hlsMode === 'native';
+    await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(function(){
+        const orig = HTMLVideoElement.prototype.canPlayType;
+        HTMLVideoElement.prototype.canPlayType = function(type) {
+          if (/mpegurl/i.test(String(type))) return ${native ? "'maybe'" : "''"};
+          return orig.call(this, type);
+        };
+      })();`,
     });
   }
   if (blockAutoplay) {
@@ -2166,4 +2185,61 @@ uiTest('late watchAvailability reject after destroy does not unhide a stale cast
   ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.cast, 'new player still has a cast control');
 });
+
+uiTest('cast button is not offered on the hls.js MSE path', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playback: 'hls', hlsMode: 'mse', remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".cast-btn"))');
+  await new Promise((r) => setTimeout(r, 200));
+  const info = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      const src = v.getAttribute('src') || v.src || '';
+      return {
+        hidden: document.querySelector('.cast-btn')?.hidden ?? null,
+        watches: window.__remoteWatchCalls ?? 0,
+        prompts: window.__remotePrompts ?? 0,
+        src,
+        nativeHls: v.canPlayType('application/vnd.apple.mpegurl'),
+        hlsSupported: Boolean(window.Hls && window.Hls.isSupported()),
+      };
+    })()`
+  );
+  assert.equal(info.nativeHls, '', 'test must force the non-native HLS branch');
+  assert.equal(info.hlsSupported, true, 'hls.js must be the MSE driver');
+  assert.equal(info.hidden, true, 'MSE/blob playback must not offer cast');
+  assert.equal(info.watches, 0, 'must not watchAvailability on the hls.js path');
+  assert.equal(info.prompts, 0);
+});
+
+uiTest('cast button is offered for native HLS src URL', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playback: 'hls', hlsMode: 'native', remotePlayback: { available: true } }
+  );
+  await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
+  const info = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      const src = v.getAttribute('src') || '';
+      return {
+        hidden: document.querySelector('.cast-btn')?.hidden ?? null,
+        watches: window.__remoteWatchCalls ?? 0,
+        src,
+        nativeHls: v.canPlayType('application/vnd.apple.mpegurl'),
+      };
+    })()`
+  );
+  assert.equal(info.nativeHls, 'maybe');
+  assert.match(info.src, /\/api\/hls\//);
+  assert.equal(info.hidden, false, 'native HLS src URL may offer Remote Playback');
+  assert.ok(info.watches >= 1);
+});
+
 

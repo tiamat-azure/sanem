@@ -8,6 +8,8 @@
 // phone only — never rotate native fullscreen, and never rotate a
 // tall/narrow desktop window. Cast uses the W3C Remote Playback API on
 // video.remote (prompt / watchAvailability / statechange); no Cast SDK.
+// Offer cast only for a normal src URL (progressive / native HLS). Never
+// on the hls.js MSE/blob path.
 // Do not add is-fullscreen until native lands or overlay fallback applies:
 // the class sets aspect-ratio:auto; height:100% without position:fixed and
 // would collapse the player for ~400ms on no-op phones.
@@ -174,6 +176,9 @@ export function mountPlayer(root, { file, next, onNext }) {
       video.src = mediaUrl; // last resort
     }
   }
+  // Remote Playback needs a fetchable src URL. hls.js attachMedia drives MSE
+  // (blob:/MediaSource) which Chromecast/AirPlay cannot play; never offer it.
+  const mseHls = Boolean(hls);
 
   // --- restore volume / position ---
   const savedVol = Number(localStorage.getItem(VOLUME_KEY));
@@ -329,18 +334,20 @@ export function mountPlayer(root, { file, next, onNext }) {
   // --- remote playback (W3C RemotePlayback on HTMLVideoElement.remote) ---
   // Chromecast / AirPlay-class devices via the UA picker. No Cast SDK, no
   // Presentation API. Firefox and other UAs without `remote` hide the button.
+  // Captain B: only when the <video> has a normal src URL (direct or native
+  // HLS). hls.js MSE/blob never gets a cast control.
   let remoteWatchId = null;
   let remoteWatchPending = null;
   let lastAvailable = false;
   let castAlive = true;
-  const remote = hasRemotePrompt(video.remote) ? video.remote : null;
+  const remote = !mseHls && hasRemotePrompt(video.remote) ? video.remote : null;
   const isCastLive = () =>
     Boolean(remote && (remote.state === 'connected' || remote.state === 'connecting'));
   // One helper for statechange and availability: stay visible while live,
   // otherwise honor the last watchAvailability result (hide when no devices).
   const syncCastUi = () => {
     if (!castAlive) return;
-    if (!remote) {
+    if (mseHls || !remote) {
       btnCast.hidden = true;
       btnCast.classList.remove('is-casting');
       btnCast.setAttribute('aria-pressed', 'false');
@@ -352,7 +359,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     btnCast.hidden = !(lastAvailable || live);
   };
   const applyCastAvailability = (available) => {
-    if (!castAlive) return;
+    if (!castAlive || mseHls) return;
     lastAvailable = Boolean(available);
     syncCastUi();
   };
@@ -368,7 +375,7 @@ export function mountPlayer(root, { file, next, onNext }) {
           return id;
         })
         .catch(() => {
-          if (!castAlive) return;
+          if (!castAlive || mseHls) return;
           // UA cannot monitor devices in the background (W3C): still offer
           // prompt() so the picker can discover them on a user gesture.
           applyCastAvailability(true);
@@ -381,7 +388,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   }
   btnCast.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!castAlive) return;
+    if (!castAlive || mseHls) return;
     if (!hasRemotePrompt(video.remote)) return;
     video.remote.prompt().catch(() => {});
   });
