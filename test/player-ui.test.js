@@ -2420,6 +2420,21 @@ uiTest('prompt cancel restores the cookie-gated src', async (t) => {
   await waitCastReady(send);
   await evaluate(
     send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.loop = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = 0.8;
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(send, '(document.querySelector("video")?.currentTime || 0) >= 0.5');
+  await evaluate(
+    send,
     `(function(){
       const el = document.querySelector('.player-container');
       el.dispatchEvent(new PointerEvent('pointermove', {
@@ -2436,8 +2451,10 @@ uiTest('prompt cancel restores the cookie-gated src', async (t) => {
   await waitFor(
     send,
     `(function(){
-      const src = document.querySelector('video')?.getAttribute('src') || '';
-      return src.includes('/api/media/') && !/[?&]sig=/.test(src);
+      const v = document.querySelector('video');
+      const src = v?.getAttribute('src') || '';
+      if (!src.includes('/api/media/') || /[?&]sig=/.test(src)) return false;
+      return (v.currentTime || 0) >= 0.5;
     })()`
   );
   const ui = await evaluate(send, SNAPSHOT);
@@ -2445,6 +2462,7 @@ uiTest('prompt cancel restores the cookie-gated src', async (t) => {
   assert.equal(ui.cast.pressed, 'false');
   assert.match(ui.videoSrc, /\/api\/media\//);
   assert.doesNotMatch(ui.videoSrc, /[?&]sig=/);
+  assert.equal(ui.paused, false, 'pendingPlay from applySignedSrc must survive picker cancel');
 });
 
 uiTest('prompt fulfill while disconnected restores the cookie-gated src', async (t) => {

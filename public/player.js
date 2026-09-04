@@ -382,8 +382,14 @@ export function mountPlayer(root, { file, next, onNext }) {
     castSrcActive = false;
     if (!cookieSrc) return;
     if ((video.getAttribute('src') || '') === cookieSrc) return;
-    pendingSeek = video.currentTime || 0;
-    pendingPlay = !video.paused;
+    // applySignedSrc already captured seek/play. Assigning video.src resets
+    // currentTime to 0 before metadata; overwriting here would jump to the
+    // start on a fast picker cancel. Resample only after loadedmetadata
+    // consumed that capture (pendingSeek is then null).
+    if (pendingSeek == null) {
+      pendingSeek = video.currentTime || 0;
+      pendingPlay = !video.paused;
+    }
     video.src = cookieSrc;
   };
   const promptRemote = () => {
