@@ -19,6 +19,17 @@ const WATCHED_PREFIX = 'sanem-watched:';
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 const BAR_HIDE_MS = 2000;
+// Netflix-style "next episode" chip: last 15–30s (PRD §10.7 also auto-chains on ended).
+export const NEXT_UP_LEAD_S = 20;
+// Distinguish center single-tap pause from double-tap fullscreen.
+export const CENTER_DBLCLICK_MS = 300;
+
+export function shouldShowNextEpisode(next, duration, currentTime) {
+  if (!next) return false;
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  const t = Number.isFinite(currentTime) ? currentTime : 0;
+  return duration - t <= NEXT_UP_LEAD_S;
+}
 
 function decodeCastSegment(seg) {
   let cur = seg;
@@ -173,7 +184,10 @@ export function mountPlayer(root, { file, next, onNext }) {
     speed.appendChild(o);
   }
 
-  const btnNext = el('button', 'ctl ctl-next', { type: 'button' });
+  const btnNext = el('button', 'ctl ctl-next', {
+    type: 'button',
+    'aria-label': 'Épisode suivant',
+  });
   btnNext.textContent = 'Épisode suivant';
   btnNext.hidden = !next;
 
@@ -193,6 +207,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   bar.append(progress, time, btnMute, volume, speed, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
+  const nextBtnOverlay = el('button', 'next-up-btn', { type: 'button' });
+  const nextUpLabel = el('span', 'next-up-label');
+  const nextUpTitle = el('span', 'next-up-title');
+  nextBtnOverlay.append(nextUpLabel, nextUpTitle);
+  nextOverlay.appendChild(nextBtnOverlay);
 
   container.append(video, touch, centerPlay, seekHint, nextOverlay, bar, btnCast);
   root.appendChild(container);
@@ -231,6 +250,13 @@ export function mountPlayer(root, { file, next, onNext }) {
   let pendingSeek = null;
   let pendingPlay = false;
   const cookieSrc = video.getAttribute('src') || '';
+  const offerNextUp = () => {
+    if (
+      shouldShowNextEpisode(next, video.duration || file.duration || 0, video.currentTime || 0)
+    ) {
+      nextOverlay.hidden = false;
+    }
+  };
   video.addEventListener('loadedmetadata', () => {
     const fromPending = pendingSeek;
     pendingSeek = null;
@@ -246,6 +272,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       video.play().catch(() => {});
     }
     render();
+    offerNextUp();
   });
 
   // --- rendering ---
@@ -312,10 +339,9 @@ export function mountPlayer(root, { file, next, onNext }) {
   video.addEventListener('timeupdate', () => {
     render();
     savePosition(file.path, video.currentTime, video.duration);
-    if (next && video.duration && video.duration - video.currentTime <= 10) {
-      nextOverlay.hidden = false;
-    }
+    offerNextUp();
   });
+  video.addEventListener('seeked', offerNextUp);
   video.addEventListener('progress', render);
   video.addEventListener('play', () => {
     render();
@@ -328,8 +354,11 @@ export function mountPlayer(root, { file, next, onNext }) {
   video.addEventListener('volumechange', render);
   video.addEventListener('ended', () => {
     clearPosition(file.path);
-    if (next) goNext();
-    else {
+    if (next) {
+      // Existing product rule (PRD §10.7): chain to the next episode on ended.
+      nextOverlay.hidden = false;
+      goNext();
+    } else {
       nextOverlay.hidden = false;
       nextOverlay.classList.add('is-end');
       render();
@@ -364,12 +393,32 @@ export function mountPlayer(root, { file, next, onNext }) {
     onNext(next || null);
   };
 
-  btnNext.addEventListener('click', goNext);
+  btnNext.addEventListener('click', (e) => {
+    e.stopPropagation();
+    goNext();
+  });
 
-  const nextBtnOverlay = el('button', 'ctl', { type: 'button' });
-  nextBtnOverlay.textContent = next ? 'Épisode suivant ▸' : 'Revenir à la série';
-  nextBtnOverlay.addEventListener('click', goNext);
-  nextOverlay.appendChild(nextBtnOverlay);
+  if (next) {
+    nextUpLabel.textContent = 'Épisode suivant';
+    nextBtnOverlay.setAttribute('aria-label', 'Épisode suivant');
+    if (next.name) {
+      nextUpTitle.textContent = next.name;
+      nextUpTitle.hidden = false;
+    } else {
+      nextUpTitle.hidden = true;
+    }
+  } else {
+    nextUpLabel.textContent = 'Revenir à la série';
+    nextBtnOverlay.setAttribute('aria-label', 'Revenir à la série');
+    nextUpTitle.hidden = true;
+  }
+  nextBtnOverlay.addEventListener('click', (e) => {
+    e.stopPropagation();
+    goNext();
+  });
+  // Keep the chip clickable while the toolbar auto-hides (it is not inside the bar).
+  nextOverlay.addEventListener('pointerdown', (e) => e.stopPropagation());
+  nextOverlay.addEventListener('pointerup', (e) => e.stopPropagation());
 
   btnMute.addEventListener('click', () => {
     video.muted = !video.muted;
@@ -1007,6 +1056,13 @@ export function mountPlayer(root, { file, next, onNext }) {
   document.addEventListener('pointercancel', onDocPointerEnd);
 
   // --- touch zones: pointerdown/up, not click ---
+  let lastCenterToggleFull = 0;
+  const centerToggleFull = () => {
+    const now = Date.now();
+    if (now - lastCenterToggleFull < CENTER_DBLCLICK_MS) return;
+    lastCenterToggleFull = now;
+    toggleFull();
+  };
   function bindThird(node, dir) {
     let tapCount = 0;
     let tapTimer = null;
@@ -1048,7 +1104,11 @@ export function mountPlayer(root, { file, next, onNext }) {
         render();
       }
     };
-    stopHoldSeeks.push(() => stopHoldSeek(false));
+    stopHoldSeeks.push(() => {
+      stopHoldSeek(false);
+      clearTimeout(tapTimer);
+      tapCount = 0;
+    });
     onHoldPointerEnds.push((e) => {
       if (holdPointerId == null || e.pointerId !== holdPointerId) return;
       // Node pointerup still handles taps when the event lands on this third
@@ -1092,9 +1152,23 @@ export function mountPlayer(root, { file, next, onNext }) {
       if (heldMs >= 500) return;
 
       if (dir === 'center') {
-        // Immediate play/pause. Double-tap fullscreen lives on the dedicated
-        // fullscreen button, not on the video surface.
-        togglePlay();
+        // Single tap pauses/plays after a short delay; a second tap in that
+        // window cancels play-toggle and uses the existing native-first
+        // fullscreen path (PRD §11.3). Mouse dblclick is debounced below so
+        // it does not enter then immediately exit.
+        tapCount += 1;
+        if (tapCount === 1) {
+          clearTimeout(tapTimer);
+          tapTimer = setTimeout(() => {
+            tapCount = 0;
+            togglePlay();
+          }, CENTER_DBLCLICK_MS);
+          return;
+        }
+        clearTimeout(tapTimer);
+        tapTimer = null;
+        tapCount = 0;
+        centerToggleFull();
         return;
       }
 
@@ -1117,6 +1191,16 @@ export function mountPlayer(root, { file, next, onNext }) {
     node.addEventListener('pointercancel', () => {
       stopHoldSeek(true);
     });
+    if (dir === 'center') {
+      node.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        clearTimeout(tapTimer);
+        tapTimer = null;
+        tapCount = 0;
+        centerToggleFull();
+      });
+    }
   }
   bindThird(thirdL, 'left');
   bindThird(thirdC, 'center');

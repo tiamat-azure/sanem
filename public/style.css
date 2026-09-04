@@ -654,21 +654,51 @@ html.player-fs body {
 
 .next-overlay {
   position: absolute;
-  right: 5%;
-  bottom: 90px;
-  z-index: 3;
+  right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  z-index: 5;
+  pointer-events: auto;
 }
 
 .next-overlay[hidden] {
   display: none;
 }
 
-.next-overlay button {
-  background: #fff;
-  color: #05060d;
-  border: none;
-  padding: 12px 22px;
-  font-size: 1rem;
+.next-up-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-height: 46px;
+  padding: 10px 16px;
+  background: rgba(6, 7, 16, 0.88);
+  color: #fff;
+  border: 1px solid var(--sanem-accent);
+  box-shadow:
+    0 0 12px color-mix(in srgb, var(--sanem-accent) 45%, transparent),
+    0 0 24px color-mix(in srgb, var(--sanem-accent) 22%, transparent);
+  text-align: right;
+}
+
+.next-up-label {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--sanem-accent);
+  line-height: 1.2;
+}
+
+.next-up-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #fff;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.next-up-title[hidden] {
+  display: none;
 }
 
 .control-bar {
