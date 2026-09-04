@@ -2181,6 +2181,7 @@ uiTest('cast prompt is only opened from a user gesture', async (t) => {
     `cast-url fetch must use cache: no-store, got ${JSON.stringify(mintCaches)}`
   );
   await clickSelector(send, '.cast-btn');
+  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
   await waitFor(send, '(window.__castUrlFetchCache || []).length >= 2');
   const afterClick = await evaluate(send, 'window.__castUrlFetchCache');
   assert.ok(
@@ -2291,6 +2292,7 @@ uiTest('cast button hides after disconnect if devices disappeared while live', a
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
+  await waitFor(send, 'document.querySelector(".cast-btn")?.getAttribute("aria-pressed") === "true"');
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.cast.pressed, 'true');
   assert.equal(ui.cast.hidden, false);
