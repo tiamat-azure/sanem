@@ -1456,6 +1456,12 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     stopNativeGrace();
     stopNativeWatch();
     if (keepFullOnCleanup) {
+      // Same invalidation token as exitFull: in-flight requestNativeFs
+      // then/catch and a grace timer that already queued still close over
+      // the old gen. Without bumping they can adopt/overlay/exitFull on this
+      // torn-down mount and call exitNativeFs / drop html.player-fs while
+      // the remount is restoring FS.
+      fsGen += 1;
       keepFullAcrossMount = snapshotKeepFull(wantFull, container);
       return;
     }

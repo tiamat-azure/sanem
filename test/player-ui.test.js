@@ -1799,6 +1799,23 @@ const OVERLAY_FS_KEPT = `(() => {
     && el.classList.contains('is-fake-fullscreen');
 })()`;
 
+uiTest('next during native grace does not let the old request drop remount FS', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed-deferred');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  const exitsAtHop = await evaluate(send, 'window.__fsExits ?? 0');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'remount must still adopt native FS after a mid-grace hop');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, true, 'old then/catch must not strip html.player-fs');
+  assert.equal(ui.fsExits, exitsAtHop, 'torn-down mount must not exitNativeFs on the remount');
+});
+
 uiTest('next and previous keep native fullscreen across the remount', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed');

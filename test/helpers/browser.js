@@ -400,6 +400,27 @@ async function installFullscreenStub(send, behavior) {
         }, delayMs);
       };
     };
+    if (behavior === 'succeed-deferred') {
+      // Resolves after a delay so a next-episode hop can land mid-grace
+      // while requestNativeFs().then is still pending. Do not assign a
+      // detached node: the old container is gone after remount.
+      const impl = function() {
+        window.__fsRequests += 1;
+        const node = this;
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            if (node.isConnected) {
+              fsEl = node;
+              document.dispatchEvent(new Event('fullscreenchange'));
+            }
+            resolve();
+          }, 200);
+        });
+      };
+      Element.prototype.requestFullscreen = impl;
+      Element.prototype.webkitRequestFullscreen = impl;
+      return;
+    }
     if (behavior === 'webkit-delayed') {
       installPrefixed(200, false, true);
       return;
