@@ -1783,6 +1783,114 @@ uiTest('previous-episode control loads the previous file', async (t) => {
   assert.match(hash, /e01/);
 });
 
+const NATIVE_FS_KEPT = `(() => {
+  const el = document.querySelector('.player-container');
+  return Boolean(el)
+    && (document.fullscreenElement || document.webkitFullscreenElement) === el
+    && el.classList.contains('is-fullscreen')
+    && !el.classList.contains('is-fake-fullscreen');
+})()`;
+const OVERLAY_FS_KEPT = `(() => {
+  const el = document.querySelector('.player-container');
+  return Boolean(el)
+    && el.classList.contains('is-fullscreen')
+    && el.classList.contains('is-fake-fullscreen');
+})()`;
+
+uiTest('next and previous keep native fullscreen across the remount', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  const requestsAtFull = ui.fsRequests;
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'native FS must survive next-episode remount');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsIcon, '#i-exit-fullscreen');
+  assert.ok(ui.fsRequests > requestsAtFull, 're-request native FS on the new container');
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  await tapSelector(send, '.ctl-prev');
+  await waitFor(send, 'location.hash.includes("e01")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'native FS must survive previous-episode remount');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+uiTest('next chip and previous keep overlay fullscreen across the remount', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  const requestsAtFull = ui.fsRequests;
+  await loopAndPlay(send);
+  await fakeDurationAndTime(send, 1500, 1450);
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  await clickSelector(send, '.next-up-btn');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, OVERLAY_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, true, 'overlay FS must survive next-episode remount');
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.forcedLandscape, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsIcon, '#i-exit-fullscreen');
+  assert.equal(ui.fsRequests, requestsAtFull, 'overlay hop must not re-enter the native wait');
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  await tapSelector(send, '.ctl-prev');
+  await waitFor(send, 'location.hash.includes("e01")');
+  await waitFor(send, OVERLAY_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true, 'overlay FS must survive previous-episode remount');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.forcedLandscape, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+uiTest('ended auto-chain keeps native fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.muted = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = Math.max(0, v.duration - 0.05);
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'ended auto-chain must stay in native fullscreen');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
 uiTest('previous and next stay hidden on a non-series root file', async (t) => {
   const { send } = await openPlayer(
     t,

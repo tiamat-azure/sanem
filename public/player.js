@@ -13,6 +13,9 @@
 // Do not add is-fullscreen until native lands or overlay fallback applies:
 // the class sets aspect-ratio:auto; height:100% without position:fixed and
 // would collapse the player for ~400ms on no-op phones.
+// Episode hops destroy+remount the player (hash router). Snapshot wantFull
+// so the next mount can re-enter native FS or keep overlay classes; cleanup
+// must not exitFull() on that path or the hop drops the user out of FS.
 
 const POS_PREFIX = 'sanem-pos:';
 const WATCHED_PREFIX = 'sanem-watched:';
@@ -30,6 +33,22 @@ export const NEXT_UP_LEAD_S = 120;
 export const EPISODE_BADGE_MS = 5000;
 // Distinguish center single-tap pause from double-tap fullscreen.
 export const CENTER_DBLCLICK_MS = 300;
+
+// Hash teardown recreates the player. Carry FS intent across that remount
+// so next/prev (and ended auto-chain) stay in fullscreen. Overlay is
+// restored immediately; native is re-requested on the new container.
+let keepFullAcrossMount = null;
+
+function snapshotKeepFull(wantFull, container) {
+  if (!wantFull && !container.classList.contains('is-fullscreen')) return null;
+  return { overlay: container.classList.contains('is-fake-fullscreen') };
+}
+
+function consumeKeepFull() {
+  const snap = keepFullAcrossMount;
+  keepFullAcrossMount = null;
+  return snap;
+}
 
 // Episode label from a release-style filename ("…S04E14…" -> "Épisode 14").
 // Falls back to the bare filename when no marker is found, so neither the rail
@@ -224,6 +243,7 @@ function hasRemotePrompt(remote) {
  * @param {object|null} opts.prev - the previous episode file (same folder), or null.
  */
 export function mountPlayer(root, { file, next, prev, onNext }) {
+  const resumeFull = consumeKeepFull();
   root.textContent = '';
 
   const container = el('div', 'player-container');
@@ -478,9 +498,12 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     video.currentTime = t;
   };
   let gone = false;
+  let keepFullOnCleanup = false;
   const goTo = (target) => {
     if (gone) return;
     gone = true;
+    // Another episode keeps FS; leaving the series (target null) still exits.
+    keepFullOnCleanup = Boolean(target);
     cleanup();
     onNext(target);
   };
@@ -1126,6 +1149,17 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   window.addEventListener('orientationchange', onOrientation);
   window.addEventListener('resize', onOrientation);
 
+  if (resumeFull?.overlay) {
+    // Fake-FS: re-apply overlay immediately. Do not wait the native grace
+    // or the hop flashes out of fullscreen for ~400ms.
+    wantFull = true;
+    applyOverlayFallback();
+  } else if (resumeFull) {
+    // Native FS is bound to the old container, which this remount replaces.
+    // Re-request on the new node; overlay fallback still covers a no-op.
+    enterFull();
+  }
+
   showBar();
   render();
   container.addEventListener('pointermove', (e) => {
@@ -1393,6 +1427,11 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     video.load();
     stopNativeGrace();
     stopNativeWatch();
+    if (keepFullOnCleanup) {
+      keepFullAcrossMount = snapshotKeepFull(wantFull, container);
+      return;
+    }
+    keepFullAcrossMount = null;
     if (wantFull || isFull()) exitFull();
   }
 
