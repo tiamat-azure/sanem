@@ -27,7 +27,7 @@ const BAR_HIDE_MS = 2000;
 // skip the outro at will (PRD §10.7 also auto-chains on ended).
 export const NEXT_UP_LEAD_S = 120;
 // The episode number is a bearing, not a HUD: it fades out on its own.
-export const EPISODE_BADGE_MS = 10000;
+export const EPISODE_BADGE_MS = 5000;
 // Distinguish center single-tap pause from double-tap fullscreen.
 export const CENTER_DBLCLICK_MS = 300;
 
@@ -44,6 +44,31 @@ export function shouldShowNextEpisode(next, duration, currentTime) {
   if (!Number.isFinite(duration) || duration <= NEXT_UP_LEAD_S) return false;
   const t = Number.isFinite(currentTime) ? currentTime : 0;
   return duration - t <= NEXT_UP_LEAD_S;
+}
+
+// Same collator as GET /api/files and the Lukluk catalog: locale-aware and
+// numeric, so S01E09 sorts before S01E10. This IS the episode playback order
+// (PRD §10.7). A file with no dir (uploads/ root) has neither sibling.
+const episodeCollator = new Intl.Collator('fr', { numeric: true, sensitivity: 'base' });
+
+export function seriesSiblings(file, files) {
+  if (!file?.dir || !Array.isArray(files)) return { prev: null, next: null };
+  const siblings = files
+    .filter((f) => f.dir === file.dir)
+    .sort((a, b) => episodeCollator.compare(a.path, b.path));
+  const idx = siblings.findIndex((f) => f.path === file.path);
+  if (idx < 0) return { prev: null, next: null };
+  return {
+    prev: idx > 0 ? siblings[idx - 1] : null,
+    next: idx < siblings.length - 1 ? siblings[idx + 1] : null,
+  };
+}
+
+// Extracted so the 5 s hide can be asserted with fake timers without Chrome.
+export function scheduleBadgeHide(badge, delay = EPISODE_BADGE_MS) {
+  return setTimeout(() => {
+    badge.classList.add('is-gone');
+  }, delay);
 }
 
 function decodeCastSegment(seg) {
@@ -153,6 +178,11 @@ function setIcon(host, id) {
   if (use) use.setAttribute('href', `#${id}`);
 }
 
+function nameControl(btn, label) {
+  // CSS .has-tip paints from aria-label. Native title= would double the tip.
+  btn.setAttribute('aria-label', label);
+}
+
 function el(tag, cls, attrs = {}) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -189,10 +219,11 @@ function hasRemotePrompt(remote) {
  * Mounts a player into `root`. Returns { destroy }.
  * @param {object} opts
  * @param {object} opts.file    - the media item ({ path, name, playback, duration, ... }).
- * @param {function} opts.onNext - called with the next file, or null at the end of a series.
+ * @param {function} opts.onNext - navigate to a file, or null to leave the series.
  * @param {object|null} opts.next - the next episode file (same folder), or null.
+ * @param {object|null} opts.prev - the previous episode file (same folder), or null.
  */
-export function mountPlayer(root, { file, next, onNext }) {
+export function mountPlayer(root, { file, next, prev, onNext }) {
   root.textContent = '';
 
   const container = el('div', 'player-container');
@@ -224,16 +255,19 @@ export function mountPlayer(root, { file, next, onNext }) {
   btnMute.appendChild(icon('i-volume'));
   const volume = el('input', 'volume', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume' });
 
-  const btnNext = el('button', 'ctl ctl-next', {
-    type: 'button',
-    'aria-label': 'Épisode suivant',
-  });
-  btnNext.append(icon('i-next'), el('span', 'ctl-next-label'));
-  btnNext.querySelector('.ctl-next-label').textContent = 'Épisode suivant';
+  const btnPrev = el('button', 'ctl ctl-prev has-tip', { type: 'button' });
+  btnPrev.appendChild(icon('i-prev'));
+  nameControl(btnPrev, 'Épisode précédent');
+  btnPrev.hidden = !prev;
+
+  const btnNext = el('button', 'ctl ctl-next has-tip', { type: 'button' });
+  btnNext.appendChild(icon('i-next'));
+  nameControl(btnNext, 'Épisode suivant');
   btnNext.hidden = !next;
 
-  const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
+  const btnFull = el('button', 'ctl ctl-fs has-tip', { type: 'button' });
   btnFull.appendChild(icon('i-fullscreen'));
+  nameControl(btnFull, 'Plein écran');
 
   const btnCast = el('button', 'ctl cast-btn', {
     type: 'button',
@@ -245,13 +279,16 @@ export function mountPlayer(root, { file, next, onNext }) {
   btnCast.appendChild(castIcon());
 
   // Play/pause is the named Netflix-style center button, not a toolbar control.
-  bar.append(progress, time, btnMute, volume, btnNext, btnFull);
+  bar.append(progress, time, btnMute, volume, btnPrev, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
-  const nextBtnOverlay = el('button', 'next-up-btn', { type: 'button' });
+  const prevBtnOverlay = el('button', 'prev-up-btn has-tip', { type: 'button' });
+  prevBtnOverlay.appendChild(icon('i-prev'));
+  nameControl(prevBtnOverlay, 'Épisode précédent');
+  prevBtnOverlay.hidden = !prev;
+  const nextBtnOverlay = el('button', 'next-up-btn has-tip', { type: 'button' });
   const nextUpLabel = el('span', 'next-up-label');
-  nextBtnOverlay.append(nextUpLabel);
-  nextOverlay.appendChild(nextBtnOverlay);
+  nextOverlay.append(prevBtnOverlay, nextBtnOverlay);
 
   // Which episode am I on? Shown bare over the picture for the first seconds,
   // then gone - auto-chaining otherwise drops the viewer with no bearing.
@@ -410,6 +447,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     } else {
       nextOverlay.hidden = false;
       nextOverlay.classList.add('is-end');
+      prevBtnOverlay.hidden = true;
       render();
     }
   });
@@ -440,41 +478,53 @@ export function mountPlayer(root, { file, next, onNext }) {
     video.currentTime = t;
   };
   let gone = false;
-  const goNext = () => {
+  const goTo = (target) => {
     if (gone) return;
     gone = true;
     cleanup();
-    onNext(next || null);
+    onNext(target);
+  };
+  const goNext = () => goTo(next || null);
+  const goPrev = () => {
+    if (!prev) return;
+    goTo(prev);
   };
 
+  btnPrev.addEventListener('click', (e) => {
+    e.stopPropagation();
+    goPrev();
+  });
   btnNext.addEventListener('click', (e) => {
     e.stopPropagation();
     goNext();
   });
 
   if (next) {
-    nextUpLabel.textContent = 'Épisode suivant';
-    nextBtnOverlay.setAttribute('aria-label', 'Épisode suivant');
-    nextBtnOverlay.title = next.name || 'Épisode suivant';
+    nextBtnOverlay.replaceChildren(icon('i-next'));
+    nextBtnOverlay.classList.add('has-tip');
+    nameControl(nextBtnOverlay, 'Épisode suivant');
   } else {
+    nextBtnOverlay.replaceChildren(nextUpLabel);
+    nextBtnOverlay.classList.remove('has-tip');
     nextUpLabel.textContent = 'Revenir à la série';
     nextBtnOverlay.setAttribute('aria-label', 'Revenir à la série');
-    nextBtnOverlay.removeAttribute('title');
   }
   nextBtnOverlay.addEventListener('click', (e) => {
     e.stopPropagation();
     goNext();
   });
+  prevBtnOverlay.addEventListener('click', (e) => {
+    e.stopPropagation();
+    goPrev();
+  });
 
-  // Badge lifetime: 10 s of picture. The countdown restarts on the first
+  // Badge lifetime: 5 s of picture. The countdown restarts on the first
   // `playing` so a blocked autoplay does not burn it against a frozen frame,
   // but the mount timer still guarantees it goes away on its own.
   let badgeTimer = null;
   const hideBadgeIn = (ms) => {
     clearTimeout(badgeTimer);
-    badgeTimer = setTimeout(() => {
-      badge.classList.add('is-gone');
-    }, ms);
+    badgeTimer = scheduleBadgeHide(badge, ms);
   };
   hideBadgeIn(EPISODE_BADGE_MS);
   video.addEventListener(
@@ -726,6 +776,11 @@ export function mountPlayer(root, { file, next, onNext }) {
     return lock ? Promise.resolve(lock).catch(() => {}) : Promise.resolve();
   };
 
+  const setFsControl = (exiting) => {
+    nameControl(btnFull, exiting ? 'Quitter le plein écran' : 'Plein écran');
+    setIcon(btnFull, exiting ? 'i-exit-fullscreen' : 'i-fullscreen');
+  };
+
   // wantFull tracks the user's intent. Native requestFullscreen cannot be
   // aborted, so a late webkit assignment after exit must call exitNativeFs
   // instead of resurrecting player-fs. Overlay is a fallback on any native
@@ -867,7 +922,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     }
     container.classList.add('is-fullscreen');
     container.classList.remove('is-fake-fullscreen', 'is-forced-landscape');
-    btnFull.setAttribute('aria-label', 'Quitter le plein écran');
+    setFsControl(true);
     document.documentElement.classList.add('player-fs');
     tryLockLandscape();
     syncForcedLandscape();
@@ -885,7 +940,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeGrace();
     container.classList.add('is-fullscreen', 'is-fake-fullscreen');
     document.documentElement.classList.add('player-fs');
-    btnFull.setAttribute('aria-label', 'Quitter le plein écran');
+    setFsControl(true);
     tryLockLandscape();
     // Overlay watch dismisses silent late native for a bounded window after
     // grace (fullscreenchange still dismisses after that). Wait-phase
@@ -910,7 +965,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     if (container.classList.contains('is-fake-fullscreen')) return;
     // Leftover wait used Quitter (second ⛶/F exits). Grace wait is not
     // full yet — restore Plein écran so a tap does not look like exit.
-    btnFull.setAttribute('aria-label', 'Plein écran');
+    setFsControl(false);
     // Previous requestFullscreen often no-ops while leftover native is still
     // assigned. Re-request and restart grace after that exit actually lands.
     armNativeWait();
@@ -957,7 +1012,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     stopNativeWatch();
     container.classList.remove('is-fullscreen', 'is-fake-fullscreen', 'is-forced-landscape');
     document.documentElement.classList.remove('player-fs');
-    btnFull.setAttribute('aria-label', 'Plein écran');
+    setFsControl(false);
     exitNativeFs().catch(() => {});
     try {
       screen.orientation?.unlock?.();
@@ -981,10 +1036,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     waitingNativeFs = true;
     // Leftover native is still on screen: ⛶/F exits, so the control must
     // read Quitter. Grace wait stays Plein écran (second tap must not abort overlay).
-    btnFull.setAttribute(
-      'aria-label',
-      leftoverNative && waitingNativeFs ? 'Quitter le plein écran' : 'Plein écran'
-    );
+    setFsControl(leftoverNative && waitingNativeFs);
     if (leftoverNative) {
       // Do not request while leftover native is still assigned (often a no-op).
       // Bound the wait so a hung prior exit cannot stall toggleFull; the

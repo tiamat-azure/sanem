@@ -11,6 +11,8 @@ import {
   NEXT_UP_LEAD_S,
   EPISODE_BADGE_MS,
   episodeLabel,
+  seriesSiblings,
+  scheduleBadgeHide,
 } from '../public/player.js';
 import {
   PLAY_PATH,
@@ -48,9 +50,10 @@ async function openPlayer(
     failCastUrl = false,
     slowCastUrlMs = 0,
     spoofCastUrl,
+    extraFiles = [],
   } = {}
 ) {
-  const { baseUrl } = await startServer(t, { playback });
+  const { baseUrl } = await startServer(t, { playback, extraFiles });
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
   if (phone) await setPhoneViewport(send, viewport);
@@ -207,19 +210,35 @@ const SNAPSHOT = `({
   })(),
   nextUp: (() => {
     const wrap = document.querySelector('.next-overlay');
-    const btn = wrap?.querySelector('button');
+    const btn = wrap?.querySelector('.next-up-btn:not(.prev-up-btn)');
+    const prevBtn = wrap?.querySelector('.prev-up-btn');
     if (!wrap) return null;
     const r = wrap.getBoundingClientRect();
     const bar = document.querySelector('.control-bar');
     const br = bar?.getBoundingClientRect();
     const vp = { w: window.innerWidth, h: window.innerHeight };
+    const chip = (el) =>
+      el
+        ? {
+            hidden: el.hidden,
+            tag: el.tagName,
+            label: el.getAttribute('aria-label') ?? null,
+            hasTip: el.classList.contains('has-tip'),
+            text: (el.innerText ?? '').trim(),
+            icon: el.querySelector('use')?.getAttribute('href') ?? null,
+            tip: getComputedStyle(el, '::after').content,
+          }
+        : null;
     return {
       hidden: wrap.hidden,
       isEnd: wrap.classList.contains('is-end'),
       tag: btn?.tagName ?? null,
       label: btn?.getAttribute('aria-label') ?? null,
-      text: btn?.innerText ?? '',
-      title: btn?.getAttribute('title') ?? '',
+      text: (btn?.innerText ?? '').trim(),
+      hasTip: btn?.classList.contains('has-tip') ?? false,
+      icon: btn?.querySelector('use')?.getAttribute('href') ?? null,
+      tip: btn ? getComputedStyle(btn, '::after').content : '',
+      prev: chip(prevBtn),
       plate: btn
         ? (() => {
             const st = getComputedStyle(btn);
@@ -249,7 +268,9 @@ const SNAPSHOT = `({
     return (document.fullscreenElement || document.webkitFullscreenElement) === el;
   })(),
   htmlFs: document.documentElement.classList.contains('player-fs'),
-  fsLabel: document.querySelector('.player-container button[aria-label="Plein écran"], .player-container button[aria-label="Quitter le plein écran"]')?.getAttribute('aria-label') ?? null,
+  fsLabel: document.querySelector('.ctl-fs, .player-container button[aria-label="Plein écran"], .player-container button[aria-label="Quitter le plein écran"]')?.getAttribute('aria-label') ?? null,
+  fsHasTip: document.querySelector('.ctl-fs')?.classList.contains('has-tip') ?? false,
+  fsIcon: document.querySelector('.ctl-fs use')?.getAttribute('href') ?? null,
   fsRequests: window.__fsRequests ?? 0,
   fsExits: window.__fsExits ?? 0,
   player: (() => {
@@ -280,6 +301,31 @@ const SNAPSHOT = `({
       stacked,
       childCount: visible.length,
       nextVisible: visible.some((el) => el.classList.contains('ctl-next')),
+      prevVisible: visible.some((el) => el.classList.contains('ctl-prev')),
+    };
+  })(),
+  prevCtl: (() => {
+    const el = document.querySelector('.ctl-prev');
+    if (!el) return null;
+    return {
+      hidden: el.hidden,
+      label: el.getAttribute('aria-label'),
+      hasTip: el.classList.contains('has-tip'),
+      text: (el.innerText || '').trim(),
+      icon: el.querySelector('use')?.getAttribute('href') ?? null,
+      tip: getComputedStyle(el, '::after').content,
+    };
+  })(),
+  nextCtl: (() => {
+    const el = document.querySelector('.ctl-next');
+    if (!el) return null;
+    return {
+      hidden: el.hidden,
+      label: el.getAttribute('aria-label'),
+      hasTip: el.classList.contains('has-tip'),
+      text: (el.innerText || '').trim(),
+      icon: el.querySelector('use')?.getAttribute('href') ?? null,
+      tip: getComputedStyle(el, '::after').content,
     };
   })(),
   viewport: { w: window.innerWidth, h: window.innerHeight, portrait: window.matchMedia('(orientation: portrait)').matches },
@@ -354,6 +400,13 @@ uiTest('player UI on a smartphone portrait viewport', async (t) => {
   assert.equal(ui.toolbarPlay, false, 'play/pause must not live on the bottom toolbar');
   assert.ok(ui.bar, 'control bar is present');
   assert.equal(ui.bar.nextVisible, true, 'next-episode control should be present for wrap check');
+  assert.equal(ui.bar.prevVisible, false, 'first episode has no previous control');
+  assert.equal(ui.nextCtl.text, '', 'next is icon-only');
+  assert.equal(ui.nextCtl.label, 'Épisode suivant');
+  assert.equal(ui.nextCtl.hasTip, true);
+  assert.equal(ui.nextCtl.icon, '#i-next');
+  assert.equal(ui.fsIcon, '#i-fullscreen');
+  assert.equal(ui.fsLabel, 'Plein écran');
   assert.equal(ui.bar.stacked, false, 'toolbar children stacked onto a second line');
   assert.ok(ui.bar.wrap < 8, `toolbar wrapped by ${ui.bar.wrap}px`);
   assert.ok(ui.bar.height < 72, `toolbar height ${ui.bar.height} looks like two rows`);
@@ -1214,20 +1267,30 @@ uiTest('native fullscreen is used on a portrait phone when the API works', async
   assert.equal(ui.fs, true);
   assert.equal(ui.fakeFs, false, 'successful native fullscreen must not use the CSS overlay');
   assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
+  assert.equal(ui.fsIcon, '#i-exit-fullscreen', 'native fullscreen swaps to the exit glyph');
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsHasTip, true);
 });
 
 uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'noop');
   await clickFullscreen(send);
-  const ui = await evaluate(send, SNAPSHOT);
+  let ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.fsRequests >= 1, `native Fullscreen API must be attempted first, got ${ui.fsRequests}`);
   assert.equal(ui.nativeFs, false);
   assert.equal(ui.fs, true, 'is-fullscreen applies after overlay fallback');
   assert.equal(ui.fakeFs, true, 'no-op native request must fall back to the CSS overlay');
   assert.equal(ui.forcedLandscape, true, 'portrait fake-fullscreen rotates onto the long edge');
+  assert.equal(ui.fsIcon, '#i-exit-fullscreen', 'overlay fullscreen swaps to the exit glyph');
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
   const longEdge = Math.max(ui.player.w, ui.player.h);
   assert.ok(longEdge > 800, `expected landscape span, got ${longEdge}`);
+  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false);
+  assert.equal(ui.fsIcon, '#i-fullscreen', 'leaving overlay restores the enter glyph');
+  assert.equal(ui.fsLabel, 'Plein écran');
 });
 
 uiTest('second fullscreen tap during native wait does not abort overlay fallback', async (t) => {
@@ -1584,7 +1647,7 @@ uiTest('episode number fades away on its own', async (t) => {
   await waitFor(
     send,
     'document.querySelector(".episode-badge")?.classList.contains("is-gone") === true',
-    EPISODE_BADGE_MS + 8000
+    EPISODE_BADGE_MS + 4000
   );
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.episodeBadge.gone, true, 'badge must retire without any user action');
@@ -1641,13 +1704,11 @@ uiTest('next-episode chip appears near the end when a next file exists', async (
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.nextUp.tag, 'BUTTON', 'next-up control must be a real button');
   assert.equal(ui.nextUp.label, 'Épisode suivant');
-  assert.equal(
-    ui.nextUp.text.trim(),
-    'Épisode suivant',
-    'the label is bare type: the filename moved to the title attribute'
-  );
-  assert.match(ui.nextUp.title, /e02\.mp4/);
-  assert.equal(ui.nextUp.plate, true, 'no background plate behind the label');
+  assert.equal(ui.nextUp.hasTip, true);
+  assert.equal(ui.nextUp.text, '', 'chip is icon-only');
+  assert.equal(ui.nextUp.icon, '#i-next');
+  assert.equal(ui.nextUp.prev.hidden, true, 'first episode has no previous chip');
+  assert.equal(ui.nextUp.plate, true, 'no background plate behind the icon');
   assert.equal(ui.nextUp.inRightHalf, true, 'chip sits on the bottom-right');
   assert.equal(ui.nextUp.pointerEvents, 'auto');
   assert.equal(ui.nextUp.inert, false);
@@ -1702,6 +1763,93 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
   assert.equal(ui.nextUp.hidden, true, 'last episode must not offer Épisode suivant');
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.bar.nextVisible, false, 'toolbar next control stays hidden without a next file');
+  assert.equal(ui.bar.prevVisible, true, 'last episode still offers previous');
+  assert.equal(ui.prevCtl.label, 'Épisode précédent');
+  assert.equal(ui.prevCtl.hasTip, true);
+  assert.equal(ui.prevCtl.text, '', 'previous is icon-only');
+  assert.equal(ui.prevCtl.icon, '#i-prev');
+});
+
+uiTest('previous-episode control loads the previous file', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playPath: 'Serie/e02.mp4' }
+  );
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  await tapSelector(send, '.ctl-prev');
+  await waitFor(send, 'location.hash.includes("e01")');
+  const hash = await evaluate(send, 'location.hash');
+  assert.match(hash, /e01/);
+});
+
+uiTest('previous and next stay hidden on a non-series root file', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { playPath: 'loose.mp4', extraFiles: ['loose.mp4'] }
+  );
+  await waitFor(send, 'Boolean(document.querySelector(".control-bar"))');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.bar.prevVisible, false, 'root upload has no previous episode');
+  assert.equal(ui.bar.nextVisible, false, 'root upload has no next episode');
+  assert.equal(ui.prevCtl.hidden, true);
+  assert.equal(ui.nextCtl.hidden, true);
+});
+
+uiTest('near-end chips pair previous and next as icon-only controls', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { extraFiles: ['Serie/e00.mp4'] }
+  );
+  await loopAndPlay(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.bar.prevVisible, true, 'middle episode offers previous');
+  assert.equal(ui.bar.nextVisible, true, 'middle episode offers next');
+  await fakeDurationAndTime(send, 1500, 1450);
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, false);
+  assert.equal(ui.nextUp.prev.hidden, false, 'previous chip sits with the next chip');
+  assert.equal(ui.nextUp.prev.label, 'Épisode précédent');
+  assert.equal(ui.nextUp.prev.hasTip, true);
+  assert.equal(ui.nextUp.prev.text, '', 'previous chip is icon-only');
+  assert.equal(ui.nextUp.prev.icon, '#i-prev');
+  assert.equal(ui.nextUp.label, 'Épisode suivant');
+  assert.equal(ui.nextUp.hasTip, true);
+  assert.equal(ui.nextUp.text, '', 'next chip is icon-only');
+  assert.equal(ui.nextUp.icon, '#i-next');
+  await clickSelector(send, '.prev-up-btn');
+  await waitFor(send, 'location.hash.includes("e00")');
+});
+
+uiTest('episode chrome tooltips are French aria-labels, not visible text', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 900, height: 600 },
+    { phone: false, extraFiles: ['Serie/e00.mp4'] }
+  );
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.prevCtl.text, '');
+  assert.equal(ui.nextCtl.text, '');
+  assert.equal(ui.prevCtl.label, 'Épisode précédent');
+  assert.equal(ui.nextCtl.label, 'Épisode suivant');
+  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsHasTip, true);
+  assert.equal(ui.prevCtl.hasTip, true);
+  assert.equal(ui.nextCtl.hasTip, true);
+  assert.match(ui.prevCtl.tip, /Épisode précédent/);
+  assert.match(ui.nextCtl.tip, /Épisode suivant/);
+  const fsTip = await evaluate(send, 'getComputedStyle(document.querySelector(".ctl-fs"), "::after").content');
+  assert.match(fsTip, /Plein écran/);
 });
 
 uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
@@ -2389,6 +2537,38 @@ test('episodeLabel reads the number off a release-style filename', () => {
   assert.equal(episodeLabel({ name: 'Dr.STONE.S04E18.MULTi.1080p.mkv' }), 'Épisode 18');
   assert.equal(episodeLabel({ name: 'e01.mp4' }), 'Épisode 1');
   assert.equal(episodeLabel({ name: 'film.mkv' }), 'film.mkv', 'no marker -> bare filename');
+});
+
+test('seriesSiblings follows the files collator inside one folder', () => {
+  const files = [
+    { path: 'Serie/S01E10.mkv', dir: 'Serie', name: 'S01E10.mkv' },
+    { path: 'Serie/S01E09.mkv', dir: 'Serie', name: 'S01E09.mkv' },
+    { path: 'Other/e01.mkv', dir: 'Other', name: 'e01.mkv' },
+    { path: 'loose.mp4', dir: null, name: 'loose.mp4' },
+  ];
+  const first = seriesSiblings({ path: 'Serie/S01E09.mkv', dir: 'Serie' }, files);
+  assert.equal(first.prev, null);
+  assert.equal(first.next.path, 'Serie/S01E10.mkv');
+  const last = seriesSiblings({ path: 'Serie/S01E10.mkv', dir: 'Serie' }, files);
+  assert.equal(last.prev.path, 'Serie/S01E09.mkv');
+  assert.equal(last.next, null);
+  assert.deepEqual(seriesSiblings({ path: 'loose.mp4', dir: null }, files), { prev: null, next: null });
+  assert.deepEqual(seriesSiblings({ path: 'Other/e01.mkv', dir: 'Other' }, files), {
+    prev: null,
+    next: null,
+  });
+});
+
+test('episode badge hides after 5 seconds', (t) => {
+  assert.equal(EPISODE_BADGE_MS, 5000);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const classes = new Set();
+  const badge = { classList: { add: (c) => classes.add(c) } };
+  scheduleBadgeHide(badge);
+  t.mock.timers.tick(EPISODE_BADGE_MS - 1);
+  assert.equal(classes.has('is-gone'), false, 'still visible just before 5 s');
+  t.mock.timers.tick(1);
+  assert.equal(classes.has('is-gone'), true, 'gone at 5 s');
 });
 
 test('cast src allowlist is same-origin relative /api/media or /api/hls only', () => {

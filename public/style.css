@@ -908,25 +908,41 @@ html.player-fs body {
   bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   z-index: 5;
   pointer-events: auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
 }
 
 .next-overlay[hidden] {
   display: none;
 }
 
-/* Bare type over the picture - the Sanem signature glow does the work of a
+/* Bare icon over the picture - the Sanem signature glow does the work of a
    background. Reset the global button chrome rather than override it piecemeal. */
-.next-up-btn {
+.next-up-btn,
+.prev-up-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
+  min-width: 46px;
   min-height: 46px;
-  padding: 8px 4px;
+  padding: 8px;
   background: none;
   border: 0;
-  border-radius: 0;
+  border-radius: 10px;
   box-shadow: none;
-  text-align: right;
-  transition: color 0.15s, text-shadow 0.15s, transform 0.15s;
+  color: var(--sanem-accent);
+  transition: color 0.15s, filter 0.15s, transform 0.15s;
+}
+
+.next-up-btn .ico,
+.prev-up-btn .ico {
+  width: 28px;
+  height: 28px;
+  filter:
+    drop-shadow(0 0 10px color-mix(in srgb, var(--sanem-accent) 65%, transparent))
+    drop-shadow(0 2px 6px rgba(0, 0, 0, 0.85));
 }
 
 .next-up-label {
@@ -942,12 +958,19 @@ html.player-fs body {
 
 /* Hover / focus is the only affordance left once the box is gone. */
 .next-up-btn:hover,
-.next-up-btn:focus-visible {
-  transform: scale(1.06);
+.next-up-btn:focus-visible,
+.prev-up-btn:hover,
+.prev-up-btn:focus-visible {
+  transform: scale(1.08);
 }
 
-.next-up-btn:hover .next-up-label,
-.next-up-btn:focus-visible .next-up-label {
+.next-overlay.is-end .next-up-btn {
+  padding: 8px 4px;
+  min-width: 0;
+}
+
+.next-overlay.is-end .next-up-btn:hover .next-up-label,
+.next-overlay.is-end .next-up-btn:focus-visible .next-up-label {
   color: #fff;
   text-decoration: underline;
   text-underline-offset: 5px;
@@ -1000,7 +1023,7 @@ html.player-fs body {
   transition: transform 0.2s;
   z-index: 4;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   white-space: nowrap;
   pointer-events: none;
 }
@@ -1113,14 +1136,60 @@ button.center-play:focus-visible {
   height: 24px;
 }
 
-.ctl-next {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.85rem;
+.ctl-prev,
+.ctl-next,
+.ctl-fs {
+  padding: 0 8px;
+}
+
+/* Discreet Sanem tooltip: neon cyan, no OS chrome. Hidden on coarse pointers
+   so a tap does not leave a sticky label. */
+.has-tip {
+  position: relative;
+}
+
+.has-tip::after {
+  content: attr(aria-label);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: rgba(6, 7, 16, 0.92);
+  color: var(--sanem-accent);
+  border: 1px solid color-mix(in srgb, var(--sanem-accent) 45%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sanem-accent) 35%, transparent);
+  font-size: 0.72rem;
   font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
   white-space: nowrap;
-  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 8;
+  transition: opacity 0.12s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .has-tip:hover::after,
+  .has-tip:focus-visible::after {
+    opacity: 1;
+  }
+}
+
+.ctl-fs.has-tip::after,
+.next-up-btn.has-tip::after,
+.prev-up-btn.has-tip::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.prev-up-btn.has-tip::after {
+  left: 0;
+  right: auto;
+  transform: none;
 }
 
 .time-display {
@@ -1214,14 +1283,6 @@ button.center-play:focus-visible {
   .ctl {
     min-width: 44px;
     min-height: 44px;
-  }
-  .ctl-next {
-    min-width: 44px;
-    width: 44px;
-    padding: 0;
-  }
-  .ctl-next-label {
-    display: none;
   }
   .ctl .ico {
     width: 20px;
