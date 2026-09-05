@@ -920,7 +920,8 @@ html.player-fs body {
 
 /* Bare icon over the picture - the Sanem signature glow does the work of a
    background. Reset the global button chrome rather than override it piecemeal. */
-.next-up-btn {
+.next-up-btn,
+.prev-up-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -935,7 +936,8 @@ html.player-fs body {
   transition: color 0.15s, filter 0.15s, transform 0.15s;
 }
 
-.next-up-btn .ico {
+.next-up-btn .ico,
+.prev-up-btn .ico {
   width: 28px;
   height: 28px;
   filter:
@@ -956,7 +958,9 @@ html.player-fs body {
 
 /* Hover / focus is the only affordance left once the box is gone. */
 .next-up-btn:hover,
-.next-up-btn:focus-visible {
+.next-up-btn:focus-visible,
+.prev-up-btn:hover,
+.prev-up-btn:focus-visible {
   transform: scale(1.08);
 }
 
@@ -1175,7 +1179,8 @@ button.center-play:focus-visible {
 }
 
 .ctl-fs.has-tip::after,
-.next-up-btn.has-tip::after {
+.next-up-btn.has-tip::after,
+.prev-up-btn.has-tip::after {
   left: auto;
   right: 0;
   transform: none;

@@ -282,7 +282,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   bar.append(progress, time, btnMute, volume, btnPrev, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
-  const prevBtnOverlay = el('button', 'next-up-btn prev-up-btn has-tip', { type: 'button' });
+  const prevBtnOverlay = el('button', 'prev-up-btn has-tip', { type: 'button' });
   prevBtnOverlay.appendChild(icon('i-prev'));
   nameControl(prevBtnOverlay, 'Épisode précédent');
   prevBtnOverlay.hidden = !prev;
