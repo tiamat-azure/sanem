@@ -643,7 +643,7 @@ un second la **réaffiche**. Elle se masque aussi seule après 3 s d'inactivité
 **Dimensionnement imposé** : cibles de **46 px minimum** pour les icônes de la barre (44
 px sous 640 px de large, pour tenir sur une ligne). Glyphe à 24 px (20 px sous 640 px).
 Une barre à 16 px n'est pas acceptable. Les boutons « Épisode précédent » / « Épisode
-suivant » restent labellisés (`aria-label` + tooltip) et sont **toujours** des icônes, y
+suivant » restent labellisés (`aria-label` + tooltip CSS `.has-tip`, sans `title` natif) et sont **toujours** des icônes, y
 compris hors 640 px, pour tenir sur une ligne.
 
 **Zones tactiles**, dans l'esprit des lecteurs mobiles usuels :

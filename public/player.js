@@ -179,8 +179,8 @@ function setIcon(host, id) {
 }
 
 function nameControl(btn, label) {
+  // CSS .has-tip paints from aria-label. Native title= would double the tip.
   btn.setAttribute('aria-label', label);
-  btn.setAttribute('title', label);
 }
 
 function el(tag, cls, attrs = {}) {
@@ -508,7 +508,6 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     nextBtnOverlay.classList.remove('has-tip');
     nextUpLabel.textContent = 'Revenir à la série';
     nextBtnOverlay.setAttribute('aria-label', 'Revenir à la série');
-    nextBtnOverlay.removeAttribute('title');
   }
   nextBtnOverlay.addEventListener('click', (e) => {
     e.stopPropagation();

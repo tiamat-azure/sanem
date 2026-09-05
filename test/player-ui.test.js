@@ -223,7 +223,7 @@ const SNAPSHOT = `({
             hidden: el.hidden,
             tag: el.tagName,
             label: el.getAttribute('aria-label') ?? null,
-            title: el.getAttribute('title') ?? '',
+            hasTip: el.classList.contains('has-tip'),
             text: (el.innerText ?? '').trim(),
             icon: el.querySelector('use')?.getAttribute('href') ?? null,
             tip: getComputedStyle(el, '::after').content,
@@ -235,7 +235,7 @@ const SNAPSHOT = `({
       tag: btn?.tagName ?? null,
       label: btn?.getAttribute('aria-label') ?? null,
       text: (btn?.innerText ?? '').trim(),
-      title: btn?.getAttribute('title') ?? '',
+      hasTip: btn?.classList.contains('has-tip') ?? false,
       icon: btn?.querySelector('use')?.getAttribute('href') ?? null,
       tip: btn ? getComputedStyle(btn, '::after').content : '',
       prev: chip(prevBtn),
@@ -269,7 +269,7 @@ const SNAPSHOT = `({
   })(),
   htmlFs: document.documentElement.classList.contains('player-fs'),
   fsLabel: document.querySelector('.ctl-fs, .player-container button[aria-label="Plein écran"], .player-container button[aria-label="Quitter le plein écran"]')?.getAttribute('aria-label') ?? null,
-  fsTitle: document.querySelector('.ctl-fs')?.getAttribute('title') ?? null,
+  fsHasTip: document.querySelector('.ctl-fs')?.classList.contains('has-tip') ?? false,
   fsIcon: document.querySelector('.ctl-fs use')?.getAttribute('href') ?? null,
   fsRequests: window.__fsRequests ?? 0,
   fsExits: window.__fsExits ?? 0,
@@ -310,7 +310,7 @@ const SNAPSHOT = `({
     return {
       hidden: el.hidden,
       label: el.getAttribute('aria-label'),
-      title: el.getAttribute('title'),
+      hasTip: el.classList.contains('has-tip'),
       text: (el.innerText || '').trim(),
       icon: el.querySelector('use')?.getAttribute('href') ?? null,
       tip: getComputedStyle(el, '::after').content,
@@ -322,7 +322,7 @@ const SNAPSHOT = `({
     return {
       hidden: el.hidden,
       label: el.getAttribute('aria-label'),
-      title: el.getAttribute('title'),
+      hasTip: el.classList.contains('has-tip'),
       text: (el.innerText || '').trim(),
       icon: el.querySelector('use')?.getAttribute('href') ?? null,
       tip: getComputedStyle(el, '::after').content,
@@ -403,7 +403,7 @@ uiTest('player UI on a smartphone portrait viewport', async (t) => {
   assert.equal(ui.bar.prevVisible, false, 'first episode has no previous control');
   assert.equal(ui.nextCtl.text, '', 'next is icon-only');
   assert.equal(ui.nextCtl.label, 'Épisode suivant');
-  assert.equal(ui.nextCtl.title, 'Épisode suivant');
+  assert.equal(ui.nextCtl.hasTip, true);
   assert.equal(ui.nextCtl.icon, '#i-next');
   assert.equal(ui.fsIcon, '#i-fullscreen');
   assert.equal(ui.fsLabel, 'Plein écran');
@@ -1269,7 +1269,7 @@ uiTest('native fullscreen is used on a portrait phone when the API works', async
   assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
   assert.equal(ui.fsIcon, '#i-exit-fullscreen', 'native fullscreen swaps to the exit glyph');
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
-  assert.equal(ui.fsTitle, 'Quitter le plein écran');
+  assert.equal(ui.fsHasTip, true);
 });
 
 uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
@@ -1704,7 +1704,7 @@ uiTest('next-episode chip appears near the end when a next file exists', async (
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.nextUp.tag, 'BUTTON', 'next-up control must be a real button');
   assert.equal(ui.nextUp.label, 'Épisode suivant');
-  assert.equal(ui.nextUp.title, 'Épisode suivant');
+  assert.equal(ui.nextUp.hasTip, true);
   assert.equal(ui.nextUp.text, '', 'chip is icon-only');
   assert.equal(ui.nextUp.icon, '#i-next');
   assert.equal(ui.nextUp.prev.hidden, true, 'first episode has no previous chip');
@@ -1765,7 +1765,7 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
   assert.equal(ui.bar.nextVisible, false, 'toolbar next control stays hidden without a next file');
   assert.equal(ui.bar.prevVisible, true, 'last episode still offers previous');
   assert.equal(ui.prevCtl.label, 'Épisode précédent');
-  assert.equal(ui.prevCtl.title, 'Épisode précédent');
+  assert.equal(ui.prevCtl.hasTip, true);
   assert.equal(ui.prevCtl.text, '', 'previous is icon-only');
   assert.equal(ui.prevCtl.icon, '#i-prev');
 });
@@ -1819,11 +1819,11 @@ uiTest('near-end chips pair previous and next as icon-only controls', async (t) 
   assert.equal(ui.nextUp.hidden, false);
   assert.equal(ui.nextUp.prev.hidden, false, 'previous chip sits with the next chip');
   assert.equal(ui.nextUp.prev.label, 'Épisode précédent');
-  assert.equal(ui.nextUp.prev.title, 'Épisode précédent');
+  assert.equal(ui.nextUp.prev.hasTip, true);
   assert.equal(ui.nextUp.prev.text, '', 'previous chip is icon-only');
   assert.equal(ui.nextUp.prev.icon, '#i-prev');
   assert.equal(ui.nextUp.label, 'Épisode suivant');
-  assert.equal(ui.nextUp.title, 'Épisode suivant');
+  assert.equal(ui.nextUp.hasTip, true);
   assert.equal(ui.nextUp.text, '', 'next chip is icon-only');
   assert.equal(ui.nextUp.icon, '#i-next');
   await clickSelector(send, '.prev-up-btn');
@@ -1843,7 +1843,9 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
   assert.equal(ui.prevCtl.label, 'Épisode précédent');
   assert.equal(ui.nextCtl.label, 'Épisode suivant');
   assert.equal(ui.fsLabel, 'Plein écran');
-  assert.equal(ui.fsTitle, 'Plein écran');
+  assert.equal(ui.fsHasTip, true);
+  assert.equal(ui.prevCtl.hasTip, true);
+  assert.equal(ui.nextCtl.hasTip, true);
   assert.match(ui.prevCtl.tip, /Épisode précédent/);
   assert.match(ui.nextCtl.tip, /Épisode suivant/);
   const fsTip = await evaluate(send, 'getComputedStyle(document.querySelector(".ctl-fs"), "::after").content');
