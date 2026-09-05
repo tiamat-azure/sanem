@@ -23,10 +23,21 @@ export const DONE_RATIO = 0.95;
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 const BAR_HIDE_MS = 2000;
-// Netflix-style "next episode" chip: last 15–30s (PRD §10.7 also auto-chains on ended).
-export const NEXT_UP_LEAD_S = 20;
+// "Épisode suivant" label: offered for the last 2 minutes so the viewer can
+// skip the outro at will (PRD §10.7 also auto-chains on ended).
+export const NEXT_UP_LEAD_S = 120;
+// The episode number is a bearing, not a HUD: it fades out on its own.
+export const EPISODE_BADGE_MS = 10000;
 // Distinguish center single-tap pause from double-tap fullscreen.
 export const CENTER_DBLCLICK_MS = 300;
+
+// Episode label from a release-style filename ("…S04E14…" -> "Épisode 14").
+// Falls back to the bare filename when no marker is found, so neither the rail
+// nor the player badge ever shows an empty title.
+export function episodeLabel(file) {
+  const m = /(?:^|[^a-z0-9])(?:s\d{1,2})?e(\d{1,3})(?:[^0-9]|$)/i.exec(file.name);
+  return m ? `Épisode ${Number(m[1])}` : file.name;
+}
 
 export function shouldShowNextEpisode(next, duration, currentTime) {
   if (!next) return false;
@@ -124,6 +135,24 @@ export function clearPosition(path) {
   localStorage.removeItem(WATCHED_PREFIX + path);
 }
 
+// Icons come from the #i-* sprite in index.html: one stroked 24x24 family shared
+// by the shell and the player, recoloured through currentColor.
+function icon(id) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'ico');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(NS, 'use');
+  use.setAttribute('href', `#${id}`);
+  svg.appendChild(use);
+  return svg;
+}
+
+function setIcon(host, id) {
+  const use = host.querySelector('use');
+  if (use) use.setAttribute('href', `#${id}`);
+}
+
 function el(tag, cls, attrs = {}) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -178,7 +207,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     type: 'button',
     'aria-label': 'Lire',
   });
-  centerPlay.textContent = '▶';
+  centerPlay.appendChild(icon('i-play'));
 
   const bar = el('div', 'control-bar');
 
@@ -192,27 +221,19 @@ export function mountPlayer(root, { file, next, onNext }) {
   time.textContent = '0:00 / 0:00';
 
   const btnMute = el('button', 'ctl', { type: 'button', 'aria-label': 'Couper le son' });
-  btnMute.textContent = '🔊';
+  btnMute.appendChild(icon('i-volume'));
   const volume = el('input', 'volume', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume' });
-
-  const speed = el('select', 'ctl speed', { 'aria-label': 'Vitesse de lecture' });
-  for (const r of [0.75, 1, 1.25, 1.5, 1.75, 2]) {
-    const o = document.createElement('option');
-    o.value = String(r);
-    o.textContent = `${r}×`;
-    if (r === 1) o.selected = true;
-    speed.appendChild(o);
-  }
 
   const btnNext = el('button', 'ctl ctl-next', {
     type: 'button',
     'aria-label': 'Épisode suivant',
   });
-  btnNext.textContent = 'Épisode suivant';
+  btnNext.append(icon('i-next'), el('span', 'ctl-next-label'));
+  btnNext.querySelector('.ctl-next-label').textContent = 'Épisode suivant';
   btnNext.hidden = !next;
 
   const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
-  btnFull.textContent = '⛶';
+  btnFull.appendChild(icon('i-fullscreen'));
 
   const btnCast = el('button', 'ctl cast-btn', {
     type: 'button',
@@ -224,16 +245,20 @@ export function mountPlayer(root, { file, next, onNext }) {
   btnCast.appendChild(castIcon());
 
   // Play/pause is the named Netflix-style center button, not a toolbar control.
-  bar.append(progress, time, btnMute, volume, speed, btnNext, btnFull);
+  bar.append(progress, time, btnMute, volume, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
   const nextBtnOverlay = el('button', 'next-up-btn', { type: 'button' });
   const nextUpLabel = el('span', 'next-up-label');
-  const nextUpTitle = el('span', 'next-up-title');
-  nextBtnOverlay.append(nextUpLabel, nextUpTitle);
+  nextBtnOverlay.append(nextUpLabel);
   nextOverlay.appendChild(nextBtnOverlay);
 
-  container.append(video, touch, centerPlay, seekHint, nextOverlay, bar, btnCast);
+  // Which episode am I on? Shown bare over the picture for the first seconds,
+  // then gone - auto-chaining otherwise drops the viewer with no bearing.
+  const badge = el('div', 'episode-badge');
+  badge.textContent = episodeLabel(file);
+
+  container.append(video, touch, centerPlay, seekHint, badge, nextOverlay, bar, btnCast);
   root.appendChild(container);
 
   // --- source wiring ---
@@ -310,7 +335,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       progBuffer.style.width = d ? `${(bEnd / d) * 100}%` : '0%';
     }
     time.textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
-    btnMute.textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
+    setIcon(btnMute, video.muted || video.volume === 0 ? 'i-mute' : 'i-volume');
     const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
     centerPlay.hidden = !video.paused || atEnd || holdSeeking;
     centerPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
@@ -430,21 +455,35 @@ export function mountPlayer(root, { file, next, onNext }) {
   if (next) {
     nextUpLabel.textContent = 'Épisode suivant';
     nextBtnOverlay.setAttribute('aria-label', 'Épisode suivant');
-    if (next.name) {
-      nextUpTitle.textContent = next.name;
-      nextUpTitle.hidden = false;
-    } else {
-      nextUpTitle.hidden = true;
-    }
+    nextBtnOverlay.title = next.name || 'Épisode suivant';
   } else {
     nextUpLabel.textContent = 'Revenir à la série';
     nextBtnOverlay.setAttribute('aria-label', 'Revenir à la série');
-    nextUpTitle.hidden = true;
+    nextBtnOverlay.removeAttribute('title');
   }
   nextBtnOverlay.addEventListener('click', (e) => {
     e.stopPropagation();
     goNext();
   });
+
+  // Badge lifetime: 10 s of picture. The countdown restarts on the first
+  // `playing` so a blocked autoplay does not burn it against a frozen frame,
+  // but the mount timer still guarantees it goes away on its own.
+  let badgeTimer = null;
+  const hideBadgeIn = (ms) => {
+    clearTimeout(badgeTimer);
+    badgeTimer = setTimeout(() => {
+      badge.classList.add('is-gone');
+    }, ms);
+  };
+  hideBadgeIn(EPISODE_BADGE_MS);
+  video.addEventListener(
+    'playing',
+    () => {
+      if (!badge.classList.contains('is-gone')) hideBadgeIn(EPISODE_BADGE_MS);
+    },
+    { once: true }
+  );
   // Keep the chip clickable while the toolbar auto-hides (it is not inside the bar).
   nextOverlay.addEventListener('pointerdown', (e) => e.stopPropagation());
   nextOverlay.addEventListener('pointerup', (e) => e.stopPropagation());
@@ -459,10 +498,6 @@ export function mountPlayer(root, { file, next, onNext }) {
     localStorage.setItem(VOLUME_KEY, volume.value);
     localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
   });
-  speed.addEventListener('change', () => {
-    video.playbackRate = Number(speed.value);
-  });
-
   // --- remote playback (W3C RemotePlayback on HTMLVideoElement.remote) ---
   // Chromecast / AirPlay-class devices via the UA picker. No Cast SDK, no
   // Presentation API. Firefox and other UAs without `remote` hide the button.
@@ -1284,6 +1319,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     window.removeEventListener('orientationchange', onOrientation);
     window.removeEventListener('resize', onOrientation);
     clearTimeout(hideTimer);
+    clearTimeout(badgeTimer);
     savePosition(file.path, video.currentTime, video.duration);
     if (hls) {
       hls.destroy();

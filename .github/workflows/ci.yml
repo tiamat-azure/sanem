@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: lint + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # The player / series suites drive system Chrome over CDP. It is
+      # preinstalled on the ubuntu runner; fail loudly rather than let the
+      # E2E tests silently skip themselves.
+      - name: Locate Chrome
+        run: |
+          bin="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || true)"
+          if [ -z "$bin" ]; then
+            echo "::error::no Chrome/Chromium on the runner - the UI E2E suites would silently skip"
+            exit 1
+          fi
+          echo "CHROME_PATH=$bin" >> "$GITHUB_ENV"
+          "$bin" --version
+
+      - name: Test
+        run: npm test

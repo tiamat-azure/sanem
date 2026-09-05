@@ -9,6 +9,8 @@ import {
   isAllowedCastSrc,
   shouldShowNextEpisode,
   NEXT_UP_LEAD_S,
+  EPISODE_BADGE_MS,
+  episodeLabel,
 } from '../public/player.js';
 import {
   PLAY_PATH,
@@ -183,6 +185,26 @@ const SNAPSHOT = `({
     const el = document.querySelector('.next-overlay');
     return Boolean(el) && !el.hidden && el.classList.contains('is-end');
   })(),
+  episodeBadge: (() => {
+    const el = document.querySelector('.episode-badge');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const st = getComputedStyle(el);
+    const bg = st.backgroundColor;
+    return {
+      text: (el.textContent || '').trim(),
+      gone: el.classList.contains('is-gone'),
+      opacity: Number(st.opacity),
+      bare:
+        (bg === 'transparent' || bg.replace(/ /g, '') === 'rgba(0,0,0,0)') &&
+        st.borderTopWidth === '0px',
+      bold: Number(st.fontWeight) >= 700,
+      fontSize: parseFloat(st.fontSize),
+      pointerEvents: st.pointerEvents,
+      color: st.color,
+      inTopRight: r.top < window.innerHeight / 2 && r.right > window.innerWidth / 2,
+    };
+  })(),
   nextUp: (() => {
     const wrap = document.querySelector('.next-overlay');
     const btn = wrap?.querySelector('button');
@@ -197,6 +219,15 @@ const SNAPSHOT = `({
       tag: btn?.tagName ?? null,
       label: btn?.getAttribute('aria-label') ?? null,
       text: btn?.innerText ?? '',
+      title: btn?.getAttribute('title') ?? '',
+      plate: btn
+        ? (() => {
+            const st = getComputedStyle(btn);
+            const bg = st.backgroundColor;
+            const transparent = bg === 'transparent' || bg.replace(/ /g, '') === 'rgba(0,0,0,0)';
+            return transparent && st.borderTopWidth === '0px' && st.boxShadow === 'none';
+          })()
+        : null,
       pointerEvents: getComputedStyle(wrap).pointerEvents,
       inert: Boolean(wrap.inert),
       right: r.right,
@@ -835,28 +866,32 @@ uiTest('progress arrow keys seek once, not doubled by the document handler', asy
   );
 });
 
+const MUTE_SELECTOR = '.control-bar button[aria-label="Couper le son"]';
+
 uiTest('keyboard focus on the control bar holds it visible', async (t) => {
-  // Landscape so .speed is displayed (hidden under 640px portrait).
   const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
   await loopAndPlay(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
-  const speedShown = await evaluate(
+  const muteShown = await evaluate(
     send,
     `(function(){
-      const el = document.querySelector('.speed');
+      const el = document.querySelector('${MUTE_SELECTOR}');
       if (!el) return false;
       return getComputedStyle(el).display !== 'none';
     })()`
   );
-  assert.equal(speedShown, true, 'speed select must be visible so it can take focus');
-  await evaluate(send, 'document.querySelector(".speed").focus()');
-  const focused = await evaluate(send, 'document.activeElement?.classList.contains("speed") === true');
+  assert.equal(muteShown, true, 'mute button must be visible so it can take focus');
+  await evaluate(send, `document.querySelector('${MUTE_SELECTOR}').focus()`);
+  const focused = await evaluate(
+    send,
+    `document.activeElement === document.querySelector('${MUTE_SELECTOR}')`
+  );
   assert.equal(focused, true);
   await new Promise((r) => setTimeout(r, 2500));
   let ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.controlsVisible, true, 'focused speed select must not time-hide the bar');
+  assert.equal(ui.controlsVisible, true, 'focused bar control must not time-hide the bar');
   assert.equal(ui.paused, false);
-  await evaluate(send, 'document.querySelector(".speed").blur()');
+  await evaluate(send, `document.querySelector('${MUTE_SELECTOR}').blur()`);
   await waitFor(
     send,
     'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
@@ -1460,6 +1495,114 @@ uiTest('center tap does not play while the series-end overlay is showing', async
   assert.equal(ui.centerPlay, false);
 });
 
+uiTest('the shell uses the Sanem mark and one SVG icon family, no emoji', async (t) => {
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+  const brand = await evaluate(
+    send,
+    `(function(){
+      const marks = [...document.querySelectorAll('.brand-mark')];
+      return {
+        count: marks.length,
+        allSanem: marks.every((m) => m.querySelector('use')?.getAttribute('href') === '#i-sanem'),
+        symbolExists: Boolean(document.querySelector('symbol#i-sanem')),
+      };
+    })()`
+  );
+  assert.ok(brand.count >= 2, 'the mark is on the header and the login card');
+  assert.equal(brand.allSanem, true);
+  assert.equal(brand.symbolExists, true, 'the #i-sanem symbol must be in the sprite');
+
+  const icons = await evaluate(
+    send,
+    `(function(){
+      // Every icon slot must be an <svg><use href="#i-*"> resolving to a real symbol.
+      const hosts = [...document.querySelectorAll('.ico')];
+      const bad = hosts.filter((el) => {
+        if (el.tagName.toLowerCase() !== 'svg') return true;
+        const href = el.querySelector('use')?.getAttribute('href') || '';
+        return !href.startsWith('#i-') || !document.querySelector('symbol' + href);
+      });
+      // No emoji anywhere in the chrome: they cannot follow the theme.
+      // Codepoint scan rather than a unicode property class, which would need
+      // escaping twice to survive this template literal.
+      const isEmoji = (cp) =>
+        (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x2600 && cp <= 0x27bf);
+      const chrome = [
+        document.querySelector('.app-header'),
+        document.querySelector('.player-container'),
+      ].filter(Boolean);
+      const withEmoji = chrome.filter((el) =>
+        [...(el.innerText || '')].some((ch) => isEmoji(ch.codePointAt(0)))
+      );
+      return { hosts: hosts.length, bad: bad.length, withEmoji: withEmoji.length };
+    })()`
+  );
+  assert.ok(icons.hosts >= 6, `expected the icon family to be in use, saw ${icons.hosts}`);
+  assert.equal(icons.bad, 0, 'every .ico must be an <svg> pointing at an existing #i-* symbol');
+  assert.equal(icons.withEmoji, 0, 'no emoji left in the header or the player chrome');
+});
+
+uiTest('the theme toggle swaps its icon with the theme it offers', async (t) => {
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+  const read = `(function(){
+    const btn = document.getElementById('theme-toggle');
+    return {
+      theme: document.documentElement.dataset.theme,
+      label: btn.querySelector('.menu-label').textContent,
+      icon: btn.querySelector('.menu-icon use').getAttribute('href'),
+    };
+  })()`;
+  const dark = await evaluate(send, read);
+  assert.equal(dark.theme, 'dark');
+  assert.equal(dark.label, 'Thème clair');
+  assert.equal(dark.icon, '#i-sun', 'dark theme offers the sun');
+  await evaluate(send, 'document.getElementById("theme-toggle").click()');
+  const light = await evaluate(send, read);
+  assert.equal(light.theme, 'light');
+  assert.equal(light.label, 'Thème obscur');
+  assert.equal(light.icon, '#i-moon', 'light theme offers the moon');
+});
+
+uiTest('episode number is shown bare over the picture at the start', async (t) => {
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+  await loopAndPlay(send);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.ok(ui.episodeBadge, 'episode badge must exist');
+  assert.equal(ui.episodeBadge.text, 'Épisode 1', 'badge reads the number off the filename');
+  assert.equal(ui.episodeBadge.gone, false, 'badge is up at the start of the episode');
+  assert.ok(ui.episodeBadge.opacity > 0.9, `badge opacity ${ui.episodeBadge.opacity}`);
+  assert.equal(ui.episodeBadge.bare, true, 'badge must have no background and no border');
+  assert.equal(ui.episodeBadge.bold, true, 'badge uses the bold Sanem signature');
+  assert.ok(ui.episodeBadge.fontSize >= 20, `badge is large, got ${ui.episodeBadge.fontSize}px`);
+  assert.equal(ui.episodeBadge.inTopRight, true, 'badge sits in the video top-right');
+  assert.equal(ui.episodeBadge.pointerEvents, 'none', 'badge must never eat a tap');
+});
+
+uiTest('episode number fades away on its own', async (t) => {
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+  await loopAndPlay(send);
+  await waitFor(
+    send,
+    'document.querySelector(".episode-badge")?.classList.contains("is-gone") === true',
+    EPISODE_BADGE_MS + 8000
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.episodeBadge.gone, true, 'badge must retire without any user action');
+});
+
+uiTest('next-episode label stays away until the last two minutes', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await loopAndPlay(send);
+  await fakeDurationAndTime(send, 1500, 1300); // 200 s left, outside the window
+  await new Promise((r) => setTimeout(r, 250));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, true, '200 s from the end is too early for the label');
+  await fakeDurationAndTime(send, 1500, 1390); // 110 s left, inside the window
+  await waitFor(send, 'document.querySelector(".next-overlay")?.hidden === false');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nextUp.hidden, false, 'label shows once under two minutes remain');
+});
+
 uiTest('next-episode chip stays hidden on short titles even with a next file', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
@@ -1485,7 +1628,7 @@ uiTest('next-episode chip stays hidden on short titles even with a next file', a
 uiTest('next-episode chip appears near the end when a next file exists', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
-  await fakeDurationAndTime(send, 120, 105);
+  await fakeDurationAndTime(send, 1500, 1450);
   await waitFor(
     send,
     `(() => {
@@ -1498,8 +1641,13 @@ uiTest('next-episode chip appears near the end when a next file exists', async (
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.nextUp.tag, 'BUTTON', 'next-up control must be a real button');
   assert.equal(ui.nextUp.label, 'Épisode suivant');
-  assert.match(ui.nextUp.text, /Épisode suivant/);
-  assert.match(ui.nextUp.text, /e02\.mp4/);
+  assert.equal(
+    ui.nextUp.text.trim(),
+    'Épisode suivant',
+    'the label is bare type: the filename moved to the title attribute'
+  );
+  assert.match(ui.nextUp.title, /e02\.mp4/);
+  assert.equal(ui.nextUp.plate, true, 'no background plate behind the label');
   assert.equal(ui.nextUp.inRightHalf, true, 'chip sits on the bottom-right');
   assert.equal(ui.nextUp.pointerEvents, 'auto');
   assert.equal(ui.nextUp.inert, false);
@@ -1511,7 +1659,7 @@ uiTest('next-episode chip appears near the end when a next file exists', async (
 uiTest('next-episode chip stays clickable after the toolbar auto-hides and loads the next file', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
-  await fakeDurationAndTime(send, 120, 105);
+  await fakeDurationAndTime(send, 1500, 1450);
   await waitFor(
     send,
     `(() => {
@@ -1559,7 +1707,7 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
 uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
-  await fakeDurationAndTime(send, 120, 105);
+  await fakeDurationAndTime(send, 1500, 1450);
   await waitFor(
     send,
     `(() => {
@@ -2210,12 +2358,37 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   );
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
-  // The mint is deliberately slowed by 2 s (slowCastUrlMs); the default 10 s
-  // budget leaves too little margin when the whole suite loads the machine.
-  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1', 20000);
+  // The mint is deliberately slowed by 2 s (slowCastUrlMs), so this normally
+  // settles in ~3 s. It has twice hung past 20 s during a heavily loaded
+  // parallel run and could not be reproduced afterwards (4 clean full-suite
+  // runs, plus the file on its own): cause unknown. Hence the wide deadline
+  // plus the page dump below - the next occurrence should say why rather than
+  // just time out.
+  try {
+    await waitFor(send, '(window.__remotePrompts ?? 0) >= 1', 45000);
+  } catch (err) {
+    const diag = await evaluate(
+      send,
+      `JSON.stringify({
+        prompts: window.__remotePrompts ?? null,
+        fetches: (window.__castUrlFetchCache || []).length,
+        ready: document.querySelector('.cast-btn')?.getAttribute('data-cast-ready') ?? null,
+        hidden: document.querySelector('.cast-btn')?.hidden ?? null,
+        vis: document.visibilityState,
+        src: (document.querySelector('video')?.getAttribute('src') || '').slice(0, 80),
+      })`
+    );
+    throw new Error(`${err.message} | DIAG ${diag}`);
+  }
   const ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.remotePrompts >= 1, 'same gesture must prompt once mint succeeds');
   assert.match(ui.videoSrc, /[?&]sig=/);
+});
+
+test('episodeLabel reads the number off a release-style filename', () => {
+  assert.equal(episodeLabel({ name: 'Dr.STONE.S04E18.MULTi.1080p.mkv' }), 'Épisode 18');
+  assert.equal(episodeLabel({ name: 'e01.mp4' }), 'Épisode 1');
+  assert.equal(episodeLabel({ name: 'film.mkv' }), 'film.mkv', 'no marker -> bare filename');
 });
 
 test('cast src allowlist is same-origin relative /api/media or /api/hls only', () => {
@@ -2247,17 +2420,17 @@ test('cast src allowlist is same-origin relative /api/media or /api/hls only', (
 
 test('next-episode prompt is only near the end and only when a next file exists', () => {
   const next = { path: 'Serie/e02.mp4', name: 'e02.mp4' };
-  assert.equal(shouldShowNextEpisode(next, 100, 80), true, 'exactly 20s remaining');
-  assert.equal(shouldShowNextEpisode(next, 100, 85), true, 'inside the last 20s');
-  assert.equal(shouldShowNextEpisode(next, 100, 79), false, 'more than 20s remaining');
-  assert.equal(shouldShowNextEpisode(next, 100, 100), true, 'ended / remaining 0');
-  assert.equal(shouldShowNextEpisode(null, 100, 99), false, 'no next episode');
+  assert.equal(NEXT_UP_LEAD_S, 120, 'offered for the last two minutes');
+  assert.equal(shouldShowNextEpisode(next, 1500, 1380), true, 'exactly 120s remaining');
+  assert.equal(shouldShowNextEpisode(next, 1500, 1450), true, 'inside the last 120s');
+  assert.equal(shouldShowNextEpisode(next, 1500, 1379), false, 'more than 120s remaining');
+  assert.equal(shouldShowNextEpisode(next, 1500, 1500), true, 'ended / remaining 0');
+  assert.equal(shouldShowNextEpisode(null, 1500, 1499), false, 'no next episode');
   assert.equal(shouldShowNextEpisode(next, 0, 0), false, 'unknown duration');
-  assert.equal(shouldShowNextEpisode(next, 20, 19), false, 'duration equal to lead');
+  assert.equal(shouldShowNextEpisode(next, 120, 119), false, 'duration equal to lead');
   assert.equal(shouldShowNextEpisode(next, 2, 1), false, 'short title near its own end');
-  assert.equal(shouldShowNextEpisode(next, 21, 1), true, 'just longer than lead, 20s remaining');
-  assert.equal(shouldShowNextEpisode(next, 21, 0), false, 'just longer than lead, still outside window');
-  assert.equal(NEXT_UP_LEAD_S, 20);
+  assert.equal(shouldShowNextEpisode(next, 121, 1), true, 'just longer than lead, 120s remaining');
+  assert.equal(shouldShowNextEpisode(next, 121, 0), false, 'just longer than lead, still outside window');
 });
 
 uiTest('hostile mint URL is not assigned and does not prompt', async (t) => {

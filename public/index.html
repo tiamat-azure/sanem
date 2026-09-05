@@ -5,13 +5,162 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sanem</title>
     <link rel="stylesheet" href="https://releases.transloadit.com/uppy/v5.2.4/uppy.min.css" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body data-max-file-gb="%%MAX_FILE_GB%%">
+    <!-- Icon family (PRD §11.5): one stroked 24x24 grid, currentColor, no raster
+         asset and no icon font. `--brand-drop` lets the logo carry the second
+         accent while every other icon stays monochrome. -->
+    <svg class="icon-sprite" aria-hidden="true" focusable="false" width="0" height="0">
+      <symbol
+        id="i-sanem"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <rect x="1.5" y="1.5" width="21" height="21" rx="6.2" opacity="0.5" />
+        <path
+          d="M12 5.2v6M9.2 8L12 5.2 14.8 8"
+          stroke="var(--brand-drop, currentColor)"
+          stroke-width="2"
+        />
+        <path d="M9.5 13.4l6.5 3.6-6.5 3.6z" fill="currentColor" stroke="none" />
+      </symbol>
+      <symbol
+        id="i-putum"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M12 15V4M8 8l4-4 4 4" />
+        <path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" />
+      </symbol>
+      <symbol
+        id="i-lukluk"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <rect x="2.5" y="4.5" width="19" height="15" rx="3" />
+        <path d="M10.2 9.2l4.8 2.8-4.8 2.8z" fill="currentColor" stroke="none" />
+      </symbol>
+      <symbol
+        id="i-sun"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <circle cx="12" cy="12" r="4.2" />
+        <path d="M12 2.5v2.2M12 19.3v2.2M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6" />
+      </symbol>
+      <symbol
+        id="i-moon"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M20.5 14.6A8.6 8.6 0 019.4 3.5a8.6 8.6 0 1011.1 11.1z" />
+      </symbol>
+      <symbol
+        id="i-logout"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M9.5 4H6a2 2 0 00-2 2v12a2 2 0 002 2h3.5" />
+        <path d="M16 15.5l3.5-3.5L16 8.5M19.5 12h-10" />
+      </symbol>
+      <symbol
+        id="i-menu"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+      >
+        <path d="M4 7h16M4 12h16M4 17h16" />
+      </symbol>
+      <symbol
+        id="i-volume"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z" />
+        <path d="M16 9a4.2 4.2 0 010 6M18.8 6.2a8 8 0 010 11.6" />
+      </symbol>
+      <symbol
+        id="i-mute"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z" />
+        <path d="M16.5 9.5l5 5M21.5 9.5l-5 5" />
+      </symbol>
+      <symbol
+        id="i-play"
+        viewBox="0 0 24 24"
+      >
+        <path d="M7.5 4.5l13 7.5-13 7.5z" fill="currentColor" />
+      </symbol>
+      <symbol
+        id="i-next"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M5 5.5l9 6.5-9 6.5z" fill="currentColor" stroke="none" />
+        <path d="M18 5v14" />
+      </symbol>
+      <symbol
+        id="i-fullscreen"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M9 3.5H5.5a2 2 0 00-2 2V9M15 3.5h3.5a2 2 0 012 2V9M9 20.5H5.5a2 2 0 01-2-2V15M15 20.5h3.5a2 2 0 002-2V15" />
+      </symbol>
+    </svg>
+
     <!-- Login (shown when /api/session -> authenticated: false) -->
     <div id="login-screen" class="screen" hidden>
       <form id="login-form" class="login-card">
-        <h1>Sanem</h1>
+        <h1 class="login-brand">
+          <svg class="brand-mark" aria-hidden="true"><use href="#i-sanem" /></svg>
+          <span>Sanem</span>
+        </h1>
         <p class="tagline">Putum &amp; Lukluk - dépose et regarde.</p>
         <label for="password">Mot de passe</label>
         <input
@@ -29,7 +178,10 @@
     <!-- Application shell -->
     <div id="app" class="screen" hidden>
       <header class="app-header">
-        <a class="brand" href="#/">Sanem</a>
+        <a class="brand" href="#/">
+          <svg class="brand-mark" aria-hidden="true"><use href="#i-sanem" /></svg>
+          <span>Sanem</span>
+        </a>
         <div class="header-actions">
           <button
             id="app-menu-button"
@@ -40,13 +192,25 @@
             aria-controls="app-menu"
             title="Menu"
           >
-            ☰
+            <svg class="ico" aria-hidden="true"><use href="#i-menu" /></svg>
           </button>
           <nav id="app-menu" class="app-menu" hidden aria-label="Menu de l'application">
-            <a class="app-menu-item" data-tab="putum" href="#/putum">Putum</a>
-            <a class="app-menu-item" data-tab="lukluk" href="#/lukluk">Lukluk</a>
-            <button id="theme-toggle" type="button">Thème clair</button>
-            <button id="logout-button" type="button">Déconnexion</button>
+            <a class="app-menu-item" data-tab="putum" href="#/putum">
+              <svg class="ico menu-icon" aria-hidden="true"><use href="#i-putum" /></svg>
+              <span class="menu-label">Putum</span>
+            </a>
+            <a class="app-menu-item" data-tab="lukluk" href="#/lukluk">
+              <svg class="ico menu-icon" aria-hidden="true"><use href="#i-lukluk" /></svg>
+              <span class="menu-label">Lukluk</span>
+            </a>
+            <button id="theme-toggle" type="button">
+              <svg class="ico menu-icon" aria-hidden="true"><use href="#i-sun" /></svg>
+              <span class="menu-label">Thème clair</span>
+            </button>
+            <button id="logout-button" type="button">
+              <svg class="ico menu-icon" aria-hidden="true"><use href="#i-logout" /></svg>
+              <span class="menu-label">Déconnexion</span>
+            </button>
           </nav>
         </div>
       </header>
@@ -60,12 +224,12 @@
         <h1 class="hub-title">Que veux-tu faire&nbsp;?</h1>
         <div class="hub-tiles">
           <a class="hub-tile tile-putum" href="#/putum">
-            <span class="tile-icon" aria-hidden="true">📤</span>
+            <svg class="ico tile-icon" aria-hidden="true"><use href="#i-putum" /></svg>
             <span class="tile-term">Putum</span>
             <span class="tile-gloss">Envoyer des fichiers</span>
           </a>
           <a class="hub-tile tile-lukluk" href="#/lukluk">
-            <span class="tile-icon" aria-hidden="true">🎬</span>
+            <svg class="ico tile-icon" aria-hidden="true"><use href="#i-lukluk" /></svg>
             <span class="tile-term">Lukluk</span>
             <span class="tile-gloss" data-hub-count>Regarder les vidéos</span>
           </a>

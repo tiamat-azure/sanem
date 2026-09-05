@@ -3,7 +3,13 @@
 // same page (PRD §11). Neon dark theme by default, light/dark toggle
 // persisted in localStorage.
 
-import { mountPlayer, loadPosition, loadWatchedAt, watchState } from './player.js';
+import {
+  mountPlayer,
+  loadPosition,
+  loadWatchedAt,
+  watchState,
+  episodeLabel,
+} from './player.js';
 
 const THEME_KEY = 'sanem-theme';
 const LAST_TAB_KEY = 'sanem-last-tab';
@@ -28,13 +34,18 @@ let filesCache = [];
 let activePlayer = null;
 
 // --- theme ---
-function themeActionLabel(theme) {
-  return theme === 'dark' ? 'Thème clair' : 'Thème obscur';
+// The toggle advertises the theme it switches *to*, icon included.
+function themeAction(theme) {
+  return theme === 'dark'
+    ? { label: 'Thème clair', icon: 'i-sun' }
+    : { label: 'Thème obscur', icon: 'i-moon' };
 }
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem(THEME_KEY, theme);
-  themeToggle.textContent = themeActionLabel(theme);
+  const { label, icon } = themeAction(theme);
+  themeToggle.querySelector('.menu-label').textContent = label;
+  themeToggle.querySelector('.menu-icon use').setAttribute('href', `#${icon}`);
 }
 applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
 themeToggle.addEventListener('click', () => {
@@ -345,14 +356,6 @@ function buildSeriesRow(series) {
   }
   section.appendChild(track);
   return section;
-}
-
-// Episode label from a release-style filename ("…S04E14…" -> "Épisode 14").
-// Falls back to the bare filename when no marker is found, so the rail never
-// shows an empty title.
-function episodeLabel(file) {
-  const m = /(?:^|[^a-z0-9])(?:s\d{1,2})?e(\d{1,3})(?:[^0-9]|$)/i.exec(file.name);
-  return m ? `Épisode ${Number(m[1])}` : file.name;
 }
 
 // Action verb for a media, from what playback left behind (PRD §10.8):
