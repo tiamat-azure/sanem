@@ -51,9 +51,10 @@ async function openPlayer(
     slowCastUrlMs = 0,
     spoofCastUrl,
     extraFiles = [],
+    fileMeta = {},
   } = {}
 ) {
-  const { baseUrl } = await startServer(t, { playback, extraFiles });
+  const { baseUrl } = await startServer(t, { playback, extraFiles, fileMeta });
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
   if (phone) await setPhoneViewport(send, viewport);
@@ -265,6 +266,7 @@ const SNAPSHOT = `({
   forcedLandscape: document.querySelector('.player-container')?.classList.contains('is-forced-landscape') ?? false,
   nativeFs: (() => {
     const el = document.querySelector('.player-container');
+    if (!el) return false;
     return (document.fullscreenElement || document.webkitFullscreenElement) === el;
   })(),
   htmlFs: document.documentElement.classList.contains('player-fs'),
@@ -1781,6 +1783,228 @@ uiTest('previous-episode control loads the previous file', async (t) => {
   await waitFor(send, 'location.hash.includes("e01")');
   const hash = await evaluate(send, 'location.hash');
   assert.match(hash, /e01/);
+});
+
+const NATIVE_FS_KEPT = `(() => {
+  const el = document.querySelector('.player-container');
+  return Boolean(el)
+    && (document.fullscreenElement || document.webkitFullscreenElement) === el
+    && el.classList.contains('is-fullscreen')
+    && !el.classList.contains('is-fake-fullscreen');
+})()`;
+const OVERLAY_FS_KEPT = `(() => {
+  const el = document.querySelector('.player-container');
+  return Boolean(el)
+    && el.classList.contains('is-fullscreen')
+    && el.classList.contains('is-fake-fullscreen');
+})()`;
+
+uiTest('next during native grace does not let the old request drop remount FS', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed-deferred');
+  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
+  const exitsAtHop = await evaluate(send, 'window.__fsExits ?? 0');
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'remount must still adopt native FS after a mid-grace hop');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, true, 'old then/catch must not strip html.player-fs');
+  assert.equal(ui.fsExits, exitsAtHop, 'torn-down mount must not exitNativeFs on the remount');
+});
+
+uiTest('next and previous keep native fullscreen across the remount', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  const requestsAtFull = ui.fsRequests;
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'native FS must survive next-episode remount');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.forcedLandscape, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsIcon, '#i-exit-fullscreen');
+  assert.ok(ui.fsRequests > requestsAtFull, 're-request native FS on the new container');
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  await tapSelector(send, '.ctl-prev');
+  await waitFor(send, 'location.hash.includes("e01")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'native FS must survive previous-episode remount');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+uiTest('next chip and previous keep overlay fullscreen across the remount', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  const requestsAtFull = ui.fsRequests;
+  await loopAndPlay(send);
+  await fakeDurationAndTime(send, 1500, 1450);
+  await waitFor(
+    send,
+    `(() => {
+      const el = document.querySelector('.next-overlay');
+      return Boolean(el) && !el.hidden && !el.classList.contains('is-end');
+    })()`
+  );
+  await clickSelector(send, '.next-up-btn');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, OVERLAY_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, true, 'overlay FS must survive next-episode remount');
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.forcedLandscape, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsIcon, '#i-exit-fullscreen');
+  assert.equal(ui.fsRequests, requestsAtFull, 'overlay hop must not re-enter the native wait');
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  await tapSelector(send, '.ctl-prev');
+  await waitFor(send, 'location.hash.includes("e01")');
+  await waitFor(send, OVERLAY_FS_KEPT);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true, 'overlay FS must survive previous-episode remount');
+  assert.equal(ui.fs, true);
+  assert.equal(ui.forcedLandscape, true);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+uiTest('ended auto-chain keeps native fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  await waitFor(send, 'Boolean(document.querySelector("video"))');
+  await evaluate(
+    send,
+    `(async function(){
+      const v = document.querySelector('video');
+      v.muted = true;
+      await new Promise((r) => {
+        if (v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0) return r();
+        v.addEventListener('loadedmetadata', r, { once: true });
+      });
+      v.currentTime = Math.max(0, v.duration - 0.05);
+      await v.play().catch(() => {});
+      return true;
+    })()`
+  );
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(send, NATIVE_FS_KEPT);
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true, 'ended auto-chain must stay in native fullscreen');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+const FS_CHROME_CLEARED = `(() => {
+  const htmlFs = document.documentElement.classList.contains('player-fs');
+  const el = document.querySelector('.player-container');
+  const native = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  const overlay = Boolean(el?.classList.contains('is-fake-fullscreen') || el?.classList.contains('is-fullscreen'));
+  return !htmlFs && !native && !overlay;
+})()`;
+
+uiTest('next into a heavy warning clears keep-full so Lire quand même does not restore FS', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { fileMeta: { 'Serie/e02.mp4': { heavy: true } } }
+  );
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.htmlFs, true);
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(
+    send,
+    `(() => {
+      const w = document.getElementById('player-warning');
+      return Boolean(w) && !w.hidden && w.textContent.includes('Lire quand même');
+    })()`
+  );
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'heavy warning must drop leftover player-fs chrome');
+  assert.equal(ui.player, null, 'heavy warning must not mount a player yet');
+  assert.equal(ui.fs, false);
+  assert.equal(ui.fakeFs, false);
+  await tapSelector(send, '#player-warning button');
+  await waitFor(send, 'Boolean(document.querySelector(".player-container"))');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'deferred mount after heavy warning must not restore FS');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.nativeFs, false);
+});
+
+uiTest('next into playback:none clears keep-full so a later playable mount does not restore FS', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { fileMeta: { 'Serie/e02.mp4': { playback: 'none' } } }
+  );
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(
+    send,
+    `Boolean(document.querySelector('.empty-message'))`
+  );
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'unplayable target must drop leftover player-fs chrome');
+  assert.equal(ui.player, null, 'playback:none must not mount a player');
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/e01.mp4')}`);
+  await waitFor(send, 'Boolean(document.querySelector(".player-container") && document.querySelector(".control-bar"))');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'later unrelated mountPlayer must not restore FS');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.htmlFs, false);
+});
+
+uiTest('missing file and series route clear document FS without restoring on the next play', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.htmlFs, true);
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/missing.mp4')}`);
+  await waitFor(send, `Boolean(document.querySelector('.empty-message'))`);
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'missing file must drop leftover player-fs chrome');
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/serie/Serie')}`);
+  await waitFor(send, 'Boolean(document.querySelector(".serie-hero-play"))');
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'non-player series route must not keep player-fs');
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/e01.mp4')}`);
+  await waitFor(send, 'Boolean(document.querySelector(".player-container") && document.querySelector(".control-bar"))');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'play after a non-player route must not restore FS');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, false);
 });
 
 uiTest('previous and next stay hidden on a non-series root file', async (t) => {

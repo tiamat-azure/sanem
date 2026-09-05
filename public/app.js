@@ -5,6 +5,7 @@
 
 import {
   mountPlayer,
+  abandonKeepFull,
   loadPosition,
   loadWatchedAt,
   watchState,
@@ -520,6 +521,8 @@ function renderPlayer(path) {
   const rootEl = document.getElementById('player-root');
 
   if (!file || file.playback === 'none') {
+    // No mountPlayer: drop a pending hop snap and leftover player-fs chrome.
+    abandonKeepFull();
     rootEl.innerHTML = '<p class="empty-message">Cette vidéo n\'est pas lisible ici.</p>';
     return;
   }
@@ -541,6 +544,7 @@ function renderPlayer(path) {
 
   // §10.5 - heavy path 3 above 1080p: warn before playing.
   if (file.heavy) {
+    abandonKeepFull();
     warning.hidden = false;
     warning.innerHTML =
       '<p>Cette vidéo est encodée dans un format lourd et en haute définition. ' +
@@ -576,6 +580,11 @@ async function route() {
   let tab = 'putum';
   if (parts[0] === 'lukluk') tab = 'lukluk';
   if (parts[0] === 'putum') tab = 'putum';
+
+  const isPlay = parts[0] === 'lukluk' && parts[1] === 'play';
+  // Play hops keep the snap until renderPlayer / mountPlayer. Any other
+  // screen must not leave html.player-fs or a pending restore.
+  if (!isPlay) abandonKeepFull();
 
   if (hash === '/') {
     const lastTab = localStorage.getItem(LAST_TAB_KEY);
@@ -640,6 +649,7 @@ loginForm.addEventListener('submit', async (e) => {
 document.getElementById('logout-button').addEventListener('click', async () => {
   await api('/api/logout', { method: 'POST' });
   teardown();
+  abandonKeepFull();
   showApp(false);
 });
 
