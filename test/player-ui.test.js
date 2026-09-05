@@ -266,6 +266,7 @@ const SNAPSHOT = `({
   forcedLandscape: document.querySelector('.player-container')?.classList.contains('is-forced-landscape') ?? false,
   nativeFs: (() => {
     const el = document.querySelector('.player-container');
+    if (!el) return false;
     return (document.fullscreenElement || document.webkitFullscreenElement) === el;
   })(),
   htmlFs: document.documentElement.classList.contains('player-fs'),
