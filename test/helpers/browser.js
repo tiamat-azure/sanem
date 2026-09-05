@@ -64,7 +64,7 @@ async function waitForHttp(url, timeoutMs = 15000) {
   throw new Error(`did not become ready: ${url}`);
 }
 
-async function seedMedia(dataDir, rel, playback) {
+async function seedMedia(dataDir, rel, playback, extras = {}) {
   const abs = path.join(dataDir, 'uploads', ...rel.split('/'));
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.copyFile(CLIP, abs);
@@ -72,6 +72,8 @@ async function seedMedia(dataDir, rel, playback) {
   const hash = crypto.createHash('sha256').update(rel).digest('hex');
   const cacheDir = path.join(dataDir, 'transcode', hash);
   await fs.mkdir(cacheDir, { recursive: true });
+  const pb = extras.playback ?? playback;
+  const heavy = Boolean(extras.heavy);
   await fs.writeFile(
     path.join(cacheDir, 'probe.json'),
     JSON.stringify({
@@ -80,29 +82,30 @@ async function seedMedia(dataDir, rel, playback) {
       size: stats.size,
       info: {
         kind: 'video',
-        playback,
-        lane: playback === 'direct' ? 0 : 1,
+        playback: pb,
+        lane: heavy ? 3 : pb === 'direct' ? 0 : 1,
         duration: 2,
-        width: 320,
-        height: 180,
+        width: heavy ? 3840 : 320,
+        height: heavy ? 2160 : 180,
         vcodec: 'h264',
         acodec: 'aac',
         container: 'mov,mp4,m4a,3gp,3g2,mj2',
-        heavy: false,
+        heavy,
         internalSubtitles: 0,
       },
     })
   );
 }
 
-async function startServer(t, { playback = 'direct', extraFiles = [] } = {}) {
+async function startServer(t, { playback = 'direct', extraFiles = [], fileMeta = {} } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sanem-player-ui-'));
   await fs.mkdir(path.join(dataDir, 'uploads', 'Serie'), { recursive: true });
   for (const name of ['e01.mp4', 'e02.mp4']) {
-    await seedMedia(dataDir, `Serie/${name}`, playback);
+    const rel = `Serie/${name}`;
+    await seedMedia(dataDir, rel, playback, fileMeta[rel] || {});
   }
   for (const rel of extraFiles) {
-    await seedMedia(dataDir, rel, playback);
+    await seedMedia(dataDir, rel, playback, fileMeta[rel] || {});
   }
 
   const port = await getFreePort();

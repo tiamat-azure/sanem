@@ -51,9 +51,10 @@ async function openPlayer(
     slowCastUrlMs = 0,
     spoofCastUrl,
     extraFiles = [],
+    fileMeta = {},
   } = {}
 ) {
-  const { baseUrl } = await startServer(t, { playback, extraFiles });
+  const { baseUrl } = await startServer(t, { playback, extraFiles, fileMeta });
   const cookie = await loginCookie(baseUrl);
   const { send } = await openChrome(t, { touch: phone });
   if (phone) await setPhoneViewport(send, viewport);
@@ -1889,6 +1890,103 @@ uiTest('ended auto-chain keeps native fullscreen', async (t) => {
   assert.equal(ui.nativeFs, true, 'ended auto-chain must stay in native fullscreen');
   assert.equal(ui.fakeFs, false);
   assert.equal(ui.fsLabel, 'Quitter le plein écran');
+});
+
+const FS_CHROME_CLEARED = `(() => {
+  const htmlFs = document.documentElement.classList.contains('player-fs');
+  const el = document.querySelector('.player-container');
+  const native = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  const overlay = Boolean(el?.classList.contains('is-fake-fullscreen') || el?.classList.contains('is-fullscreen'));
+  return !htmlFs && !native && !overlay;
+})()`;
+
+uiTest('next into a heavy warning clears keep-full so Lire quand même does not restore FS', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { fileMeta: { 'Serie/e02.mp4': { heavy: true } } }
+  );
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.htmlFs, true);
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(
+    send,
+    `(() => {
+      const w = document.getElementById('player-warning');
+      return Boolean(w) && !w.hidden && w.textContent.includes('Lire quand même');
+    })()`
+  );
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'heavy warning must drop leftover player-fs chrome');
+  assert.equal(ui.fs, false);
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.nativeFs, false);
+  await tapSelector(send, '#player-warning button');
+  await waitFor(send, 'Boolean(document.querySelector(".player-container"))');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'deferred mount after heavy warning must not restore FS');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, false);
+  assert.equal(ui.nativeFs, false);
+});
+
+uiTest('next into playback:none clears keep-full so a later playable mount does not restore FS', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 390, height: 844, landscape: false },
+    { fileMeta: { 'Serie/e02.mp4': { playback: 'none' } } }
+  );
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.nativeFs, true);
+  await tapSelector(send, '.ctl-next');
+  await waitFor(send, 'location.hash.includes("e02")');
+  await waitFor(
+    send,
+    `Boolean(document.querySelector('.empty-message'))`
+  );
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'unplayable target must drop leftover player-fs chrome');
+  assert.equal(ui.nativeFs, false);
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/e01.mp4')}`);
+  await waitFor(send, 'Boolean(document.querySelector(".player-container") && document.querySelector(".control-bar"))');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'later unrelated mountPlayer must not restore FS');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.htmlFs, false);
+});
+
+uiTest('missing file and series route clear document FS without restoring on the next play', async (t) => {
+  const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await installFullscreenStub(send, 'noop');
+  await clickFullscreen(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fakeFs, true);
+  assert.equal(ui.htmlFs, true);
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/missing.mp4')}`);
+  await waitFor(send, `Boolean(document.querySelector('.empty-message'))`);
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'missing file must drop leftover player-fs chrome');
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/serie/Serie')}`);
+  await waitFor(send, 'Boolean(document.querySelector(".serie-hero-play"))');
+  await waitFor(send, FS_CHROME_CLEARED);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.htmlFs, false, 'non-player series route must not keep player-fs');
+  await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/e01.mp4')}`);
+  await waitFor(send, 'Boolean(document.querySelector(".player-container") && document.querySelector(".control-bar"))');
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'play after a non-player route must not restore FS');
+  assert.equal(ui.fakeFs, false);
+  assert.equal(ui.htmlFs, false);
 });
 
 uiTest('previous and next stay hidden on a non-series root file', async (t) => {
