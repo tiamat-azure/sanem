@@ -1923,9 +1923,9 @@ uiTest('next into a heavy warning clears keep-full so Lire quand même does not 
   await waitFor(send, FS_CHROME_CLEARED);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.htmlFs, false, 'heavy warning must drop leftover player-fs chrome');
+  assert.equal(ui.player, null, 'heavy warning must not mount a player yet');
   assert.equal(ui.fs, false);
   assert.equal(ui.fakeFs, false);
-  assert.equal(ui.nativeFs, false);
   await tapSelector(send, '#player-warning button');
   await waitFor(send, 'Boolean(document.querySelector(".player-container"))');
   ui = await evaluate(send, SNAPSHOT);
@@ -1954,7 +1954,7 @@ uiTest('next into playback:none clears keep-full so a later playable mount does 
   await waitFor(send, FS_CHROME_CLEARED);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.htmlFs, false, 'unplayable target must drop leftover player-fs chrome');
-  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.player, null, 'playback:none must not mount a player');
   await evaluate(send, `location.hash = ${JSON.stringify('#/lukluk/play/Serie/e01.mp4')}`);
   await waitFor(send, 'Boolean(document.querySelector(".player-container") && document.querySelector(".control-bar"))');
   ui = await evaluate(send, SNAPSHOT);
