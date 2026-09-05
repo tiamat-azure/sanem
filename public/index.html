@@ -102,7 +102,14 @@
       <section class="serie">
         <a class="back-link" href="#/lukluk">← Vidéothèque</a>
         <h1 id="serie-title"></h1>
-        <ul id="serie-episodes" class="episode-list"></ul>
+        <p id="serie-count" class="serie-count"></p>
+        <div id="serie-hero" class="serie-hero" hidden></div>
+        <div id="serie-rail" class="rail" hidden>
+          <button type="button" class="rail-arrow prev" aria-label="Épisodes précédents">‹</button>
+          <div id="serie-track" class="rail-track"></div>
+          <button type="button" class="rail-arrow next" aria-label="Épisodes suivants">›</button>
+        </div>
+        <p id="serie-empty" class="empty-message" hidden>Série introuvable.</p>
       </section>
     </template>
 

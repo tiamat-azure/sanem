@@ -3,7 +3,7 @@
 // same page (PRD §11). Neon dark theme by default, light/dark toggle
 // persisted in localStorage.
 
-import { mountPlayer, loadPosition, loadWatchedAt } from './player.js';
+import { mountPlayer, loadPosition, loadWatchedAt, watchState } from './player.js';
 
 const THEME_KEY = 'sanem-theme';
 const LAST_TAB_KEY = 'sanem-last-tab';
@@ -82,6 +82,15 @@ function formatSize(bytes) {
     i += 1;
   } while (v >= 1024 && i < units.length - 1);
   return `${v.toFixed(1)} ${units[i]}`;
+}
+// Clock form (h:mm:ss / m:ss) for a resume position.
+function formatClock(sec) {
+  const t = Math.max(0, Math.floor(sec));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return `${h > 0 ? h + ':' : ''}${mm}:${String(s).padStart(2, '0')}`;
 }
 function formatDuration(sec) {
   if (!sec) return '';
@@ -338,39 +347,171 @@ function buildSeriesRow(series) {
   return section;
 }
 
+// Episode label from a release-style filename ("…S04E14…" -> "Épisode 14").
+// Falls back to the bare filename when no marker is found, so the rail never
+// shows an empty title.
+function episodeLabel(file) {
+  const m = /(?:^|[^a-z0-9])(?:s\d{1,2})?e(\d{1,3})(?:[^0-9]|$)/i.exec(file.name);
+  return m ? `Épisode ${Number(m[1])}` : file.name;
+}
+
+// Action verb for a media, from what playback left behind (PRD §10.8):
+// unseen -> Lire, in-progress -> Reprendre, done -> Revoir.
+function playLabel(file) {
+  if (!file.ready) return 'Analyse…';
+  const state = watchState(file.path);
+  if (state === 'in-progress') return 'Reprendre';
+  return state === 'done' ? 'Revoir' : 'Lire';
+}
+
+// Thumbnail for the rail: same status markers as the hero poster, so both
+// zones read identically (green check when done, magenta bar when in progress).
+function railThumb(file) {
+  const wrap = thumbEl(file);
+  wrap.classList.add('rail-thumb');
+  if (watchState(file.path) === 'done') {
+    const seen = document.createElement('span');
+    seen.className = 'seen-badge';
+    seen.textContent = '✓';
+    seen.title = 'Épisode vu';
+    wrap.appendChild(seen);
+  }
+  return wrap;
+}
+
 function renderSerie(dir) {
   const frag = fromTemplate('tpl-serie');
   view.replaceChildren(frag);
   document.getElementById('serie-title').textContent = dir;
-  const list = document.getElementById('serie-episodes');
   const items = filesCache.filter((f) => f.dir === dir);
   if (!items.length) {
-    list.innerHTML = '<li class="empty-message">Série introuvable.</li>';
+    document.getElementById('serie-empty').hidden = false;
     return;
   }
-  for (const file of items) {
-    const li = document.createElement('li');
-    li.className = 'episode';
-    li.innerHTML = `<span class="episode-name">${escapeHtml(file.name)}</span>
-      <span class="episode-meta">${escapeHtml(formatDuration(file.duration))} · ${formatSize(file.size)}${file.ready ? '' : ' · analyse en cours'}</span>`;
-    const act = document.createElement('div');
-    act.className = 'episode-actions';
+
+  const hero = document.getElementById('serie-hero');
+  const rail = document.getElementById('serie-rail');
+  const track = document.getElementById('serie-track');
+  hero.hidden = false;
+  rail.hidden = false;
+
+  const doneCount = items.filter((f) => watchState(f.path) === 'done').length;
+  document.getElementById('serie-count').textContent =
+    `${items.length} épisode${items.length > 1 ? 's' : ''}` +
+    (doneCount ? ` · ${doneCount} vu${doneCount > 1 ? 's' : ''}` : '');
+
+  // --- hero: the focused episode, mirroring the Lukluk featured block ---
+  function renderHero(file) {
+    hero.style.backgroundImage = gradientFor(file.path);
+    hero.replaceChildren();
+
+    const poster = document.createElement('div');
+    poster.className = 'serie-hero-poster';
+    poster.appendChild(railThumb(file));
+    hero.appendChild(poster);
+
+    const body = document.createElement('div');
+    body.className = 'serie-hero-body';
+    const meta = [formatDuration(file.duration), formatSize(file.size)].filter(Boolean);
+    if (!file.ready) meta.push('analyse en cours');
+    const pos = loadPosition(file.path);
+    if (pos > 0) meta.push(`reprendre à ${formatClock(pos)}`);
+    else if (watchState(file.path) === 'done') meta.push('déjà vu');
+    body.innerHTML = `<h2>${escapeHtml(episodeLabel(file))}</h2>
+      <p class="serie-hero-meta">${escapeHtml(meta.join(' · '))}</p>
+      <p class="serie-hero-file">${escapeHtml(file.name)}</p>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'serie-hero-actions';
     if (file.playback !== 'none') {
       const play = document.createElement('button');
-      play.textContent = !file.ready ? 'Analyse…' : loadPosition(file.path) > 0 ? 'Reprendre' : 'Lire';
+      play.className = 'serie-hero-play';
+      play.textContent = playLabel(file);
       play.disabled = !file.ready;
       play.addEventListener('click', () => {
         location.hash = `#/lukluk/play/${encodeURIComponent(file.path)}`;
       });
-      act.appendChild(play);
+      actions.appendChild(play);
     }
     const dl = document.createElement('a');
     dl.textContent = 'Télécharger';
     dl.href = `/api/download/${mediaPath(file.path)}`;
-    act.appendChild(dl);
-    li.appendChild(act);
-    list.appendChild(li);
+    actions.appendChild(dl);
+    body.appendChild(actions);
+    hero.appendChild(body);
   }
+
+  // --- rail: one card per episode, drives the hero ---
+  function focusCard(card, { scroll = false } = {}) {
+    for (const c of track.children) c.classList.toggle('is-current', c === card);
+    renderHero(items[Number(card.dataset.idx)]);
+    if (scroll) {
+      track.scrollTo({
+        left: Math.max(0, card.offsetLeft - track.offsetLeft),
+        behavior: 'smooth',
+      });
+    }
+  }
+
+  items.forEach((file, idx) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'rail-card';
+    card.dataset.idx = String(idx);
+    card.appendChild(railThumb(file));
+    const cap = document.createElement('span');
+    cap.className = 'rail-cap';
+    cap.textContent = episodeLabel(file);
+    card.appendChild(cap);
+    card.addEventListener('click', () => focusCard(card));
+    track.appendChild(card);
+  });
+
+  mountRailArrows(rail, track);
+
+  // Start on the episode the viewer is most likely to want: the one in
+  // progress, otherwise the first not yet finished, otherwise the first.
+  const inProgress = items.findIndex((f) => watchState(f.path) === 'in-progress');
+  const firstUnfinished = items.findIndex((f) => watchState(f.path) !== 'done');
+  const startIdx = Math.max(0, inProgress >= 0 ? inProgress : firstUnfinished);
+  const startCard = track.children[startIdx] || track.children[0];
+  focusCard(startCard);
+  // Skip the smooth animation on first paint - jump straight there.
+  window.requestAnimationFrame(() => {
+    track.scrollLeft = Math.max(0, startCard.offsetLeft - track.offsetLeft);
+    updateRailArrows(rail, track);
+  });
+}
+
+// Arrows appear on hover/focus only (PRD §11.4 keeps the clipped half-card as
+// the touch affordance) and step by a whole visible page of cards.
+function railStep(track) {
+  const card = track.firstElementChild;
+  if (!card) return track.clientWidth;
+  const gap = parseFloat(window.getComputedStyle(track).columnGap) || 0;
+  const unit = card.offsetWidth + gap;
+  return Math.max(unit, Math.floor(track.clientWidth / unit) * unit);
+}
+function updateRailArrows(rail, track) {
+  const max = track.scrollWidth - track.clientWidth - 2;
+  rail.querySelector('.prev').disabled = track.scrollLeft <= 2;
+  rail.querySelector('.next').disabled = track.scrollLeft >= max;
+}
+function mountRailArrows(rail, track) {
+  const scrollBy = (dir) => {
+    track.scrollBy({ left: dir * railStep(track), behavior: 'smooth' });
+  };
+  rail.querySelector('.prev').addEventListener('click', () => scrollBy(-1));
+  rail.querySelector('.next').addEventListener('click', () => scrollBy(1));
+  let t = null;
+  track.addEventListener('scroll', () => {
+    clearTimeout(t);
+    t = setTimeout(() => updateRailArrows(rail, track), 80);
+  });
+  if (typeof window.ResizeObserver === 'function') {
+    new window.ResizeObserver(() => updateRailArrows(rail, track)).observe(track);
+  }
+  updateRailArrows(rail, track);
 }
 
 function renderPlayer(path) {

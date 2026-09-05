@@ -16,6 +16,10 @@
 
 const POS_PREFIX = 'sanem-pos:';
 const WATCHED_PREFIX = 'sanem-watched:';
+const DONE_PREFIX = 'sanem-done:';
+// Past this fraction of the duration the media counts as finished: the resume
+// position is dropped and a persistent "done" marker takes its place.
+export const DONE_RATIO = 0.95;
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
 const BAR_HIDE_MS = 2000;
@@ -91,9 +95,25 @@ export function loadWatchedAt(path) {
   const v = Number(localStorage.getItem(WATCHED_PREFIX + path));
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
+// Epoch ms at which this media was watched through to the end, or 0. Survives
+// the resume position being cleared, so the library can tell "finished" apart
+// from "never started" - both have no resume position (PRD §10.8).
+export function loadDoneAt(path) {
+  const v = Number(localStorage.getItem(DONE_PREFIX + path));
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+// Three-state playback status of one media, derived from what is persisted.
+export function watchState(path) {
+  if (loadPosition(path) > 0) return 'in-progress';
+  return loadDoneAt(path) > 0 ? 'done' : 'unseen';
+}
+export function markDone(path) {
+  localStorage.setItem(DONE_PREFIX + path, String(Date.now()));
+}
 function savePosition(path, seconds, duration) {
-  if (duration && seconds / duration > 0.95) {
+  if (duration && seconds / duration > DONE_RATIO) {
     clearPosition(path);
+    markDone(path);
   } else if (seconds > 3) {
     localStorage.setItem(POS_PREFIX + path, String(Math.floor(seconds)));
     localStorage.setItem(WATCHED_PREFIX + path, String(Date.now()));
@@ -357,6 +377,7 @@ export function mountPlayer(root, { file, next, onNext }) {
   video.addEventListener('volumechange', render);
   video.addEventListener('ended', () => {
     clearPosition(file.path);
+    markDone(file.path);
     if (next) {
       // Existing product rule (PRD §10.7): chain to the next episode on ended.
       nextOverlay.hidden = false;

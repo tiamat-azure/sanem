@@ -532,7 +532,11 @@ donc **par navigateur** : reprendre une lecture sur un autre appareil n'est pas 
 figure au hors-périmètre du §1. Un suivi côté serveur supposerait des comptes nominatifs,
 que ce PRD exclut toujours.
 
-Une position est effacée quand la lecture dépasse 95 % de la durée.
+Une position est effacée quand la lecture dépasse 95 % de la durée. Un marqueur
+**`sanem-done:<chemin>`** est alors écrit à sa place, et il persiste : sans lui, un
+épisode terminé serait indiscernable d'un épisode jamais lancé, les deux étant dépourvus
+de position de reprise. L'UI en dérive trois états - *jamais vu*, *en cours*, *terminé* -
+qui pilotent le verbe d'action (Lire / Reprendre / Revoir) et les marqueurs de vignette.
 
 ## 11. Frontend
 
@@ -568,7 +572,16 @@ serveur** : `GET /` sert toujours la même page.
    vignette porte le nom, une métadonnée courte, et une barre de reprise magenta si une
    position est enregistrée. Les fichiers `playback: "none"` sont listés sans bouton Lire,
    avec Télécharger seul.
-1. **Série** (`#/lukluk/serie/:dossier`) - la liste ordonnée des épisodes d'un dossier.
+1. **Série** (`#/lukluk/serie/:dossier`) - les épisodes ordonnés d'un dossier, dans la
+   même grammaire visuelle que Lukluk : un **épisode mis en avant** (grande affiche,
+   métadonnées, action dominante) surmontant un **rail horizontal** d'une vignette par
+   épisode. Cliquer une vignette recible la mise en avant sans quitter l'écran. Le rail
+   s'ouvre sur l'épisode en cours, sinon sur le premier épisode non terminé, sinon sur le
+   premier (§10.8). L'affiche mise en avant reprend les marqueurs de sa vignette : pastille
+   verte si l'épisode est terminé, barre de reprise magenta s'il est en cours. Deux flèches
+   de défilement apparaissent **au survol seulement** et avancent d'une page entière de
+   vignettes ; elles disparaissent sur pointeur grossier, où le balayage et la demi-vignette
+   coupée (§11.4) restent l'affordance.
 1. **Lecteur** (`#/lukluk/play/:chemin`) - voir 11.3.
 
 Une fois le premier choix fait, `sanem-last-tab` est écrit et le hub ne réapparaît plus :
