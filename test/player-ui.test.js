@@ -2710,6 +2710,18 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
     { width: 390, height: 844, landscape: false },
     { remotePlayback: { available: true }, slowCastUrlMs: 2000 }
   );
+  // Fixture is 2 s and the series always has e02. Autoplay `ended` auto-chains
+  // (keep-full remount, castAlive=false) during the slowed mint, so prompt
+  // never runs — CI DIAG src was /api/media/Serie/e02.mp4. Pin this mount.
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      if (!v) return;
+      v.loop = true;
+      v.pause();
+    })()`
+  );
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
   const readyBefore = await evaluate(
     send,
@@ -2729,15 +2741,12 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
     })()`
   );
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitFor(send, 'location.hash.includes("e01")');
   await clickSelector(send, '.cast-btn');
-  // The mint is deliberately slowed by 2 s (slowCastUrlMs), so this normally
-  // settles in ~3 s. It has twice hung past 20 s during a heavily loaded
-  // parallel run and could not be reproduced afterwards (4 clean full-suite
-  // runs, plus the file on its own): cause unknown. Hence the wide deadline
-  // plus the page dump below - the next occurrence should say why rather than
-  // just time out.
+  // Mint is delayed 2 s (slowCastUrlMs). Stay on e01; if we hopped, prompt
+  // will never come (old mount's then() sees !castAlive).
   try {
-    await waitFor(send, '(window.__remotePrompts ?? 0) >= 1', 45000);
+    await waitFor(send, '(window.__remotePrompts ?? 0) >= 1', 15000);
   } catch (err) {
     const diag = await evaluate(
       send,
@@ -2747,6 +2756,7 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
         ready: document.querySelector('.cast-btn')?.getAttribute('data-cast-ready') ?? null,
         hidden: document.querySelector('.cast-btn')?.hidden ?? null,
         vis: document.visibilityState,
+        hash: location.hash,
         src: (document.querySelector('video')?.getAttribute('src') || '').slice(0, 80),
       })`
     );
@@ -2754,7 +2764,9 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   }
   const ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.remotePrompts >= 1, 'same gesture must prompt once mint succeeds');
+  assert.match(ui.videoSrc, /\/api\/media\/Serie\/e01\.mp4/);
   assert.match(ui.videoSrc, /[?&]sig=/);
+  assert.match(await evaluate(send, 'location.hash'), /e01/, 'must not have auto-chained off the minting episode');
 });
 
 test('episodeLabel reads the number off a release-style filename', () => {
