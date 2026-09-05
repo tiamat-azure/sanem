@@ -518,6 +518,14 @@ Conséquence directe, à assumer dans l'UI plutôt qu'à masquer :
 
 ### 10.7 Enchaînement des épisodes
 
+- **Repère d'épisode** : à l'ouverture d'un épisode, son numéro (« Épisode 18 », déduit du
+  motif `…S04E18…` du nom de fichier) s'affiche en grand **en haut à droite de l'image**,
+  dans la couleur et la graisse signature Sanem, **sans cartouche ni fond**. Il s'efface
+  seul au bout de ~10 s. L'enchaînement automatique laisserait sinon le spectateur sans
+  aucun repère sur l'épisode en cours.
+- **Libellé « Épisode suivant »** : en bas à droite, même traitement typographique nu, et
+  proposé pendant les **2 dernières minutes**. Le survol le souligne et l'agrandit pour
+  signaler qu'il est cliquable ; un clic bascule immédiatement sur l'épisode suivant.
 - Le « suivant » est le fichier suivant **dans le même dossier**, selon l'ordre de
   `GET /api/files` (§8) : alphabétique, locale-aware et numérique. Cet ordre fait passer
   correctement `S01E09` avant `S01E10`.
@@ -622,9 +630,9 @@ déjà disponible.
 | Recul / avance 10 s  | Pas de boutons dédiés dans la barre (redondants). `currentTime ± 10` via flèches gauche/droite et double-tap sur les tiers latéraux.                                                   |
 | Barre de progression | Positionnement. Hauteur 6 px au repos, 10 px au survol, poignée de 16 px. Un liseré clair montre le tampon chargé.                                                                    |
 | Volume               | `video.volume` + coupure du son, persisté en `localStorage`.                                                                                                                          |
-| Vitesse              | `playbackRate` de 0,75× à 2×.                                                                                                                                                         |
+| Vitesse              | Retiré de la barre : `playbackRate` n'est pas exposé (fonction non utilisée). À réintroduire uniquement sur demande.                                                                   |
 | Sous-titres          | Si un `.srt` ou `.vtt` de même nom a été déposé dans le même dossier, ou si `ffprobe` a détecté une piste interne, extraite par ffmpeg.                                               |
-| Épisode suivant      | Bouton étiqueté en toutes lettres, et proposition automatique 10 s avant la fin (§10.7).                                                                                              |
+| Épisode suivant      | Libellé nu en bas à droite (pas de cartouche), affiché dans les 2 dernières minutes (§10.7). Le bouton de la barre reste étiqueté en toutes lettres.                                   |
 | Plein écran          | Fullscreen API **sur le conteneur**, jamais sur `<video>`, sinon la barre maison disparaît. Touches <kbd>F</kbd> et <kbd>Échap</kbd>. Sur téléphone : si l'API ou `orientation.lock` échoue, repli CSS qui étend la vidéo sur le grand côté (paysage). |
 
 **Barre overlay : une seule ligne**, y compris sous 390 px. `flex-wrap: nowrap`. Les

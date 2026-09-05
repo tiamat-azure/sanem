@@ -66,7 +66,8 @@ a {
 
 button,
 .card-actions a,
-.episode-actions a {
+.episode-actions a,
+.serie-hero-actions a {
   cursor: pointer;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -79,7 +80,9 @@ button,
 }
 
 button:hover,
-.card-actions a:hover {
+.card-actions a:hover,
+.episode-actions a:hover,
+.serie-hero-actions a:hover {
   transform: translateY(-1px);
 }
 
@@ -223,7 +226,9 @@ button[type='submit'] {
 
 .app-menu-item,
 .app-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   width: 100%;
   text-align: left;
   padding: 10px 14px;
@@ -234,6 +239,14 @@ button[type='submit'] {
   font-size: 1rem;
   font-weight: 600;
   min-height: 44px;
+}
+
+/* Fixed-width gutter so every label starts on the same x, whatever the glyph. */
+.menu-icon {
+  flex: 0 0 1.5rem;
+  text-align: center;
+  font-size: 1.05rem;
+  line-height: 1;
 }
 
 .app-menu-item.is-active {
@@ -564,9 +577,19 @@ main {
 
 .serie-hero-actions {
   display: flex;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+/* The download link is a secondary button: same box as the play button so the
+   two share one baseline instead of an inline link riding above it. */
+.serie-hero-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .serie-hero-play {
@@ -669,8 +692,12 @@ main {
    only way to scroll (the clipped half-card stays, PRD §11.4). */
 .rail-arrow {
   position: absolute;
-  top: calc(50% - 12px);
-  transform: translateY(-50%);
+  /* Centred with auto margins inside the track band (minus its scrollbar
+     gutter), never with translateY: the global button:hover transform would
+     override a transform-based centring and make the arrow jump. */
+  top: 0;
+  bottom: 8px;
+  margin-block: auto;
   z-index: 2;
   width: 36px;
   height: 64px;
@@ -694,6 +721,7 @@ main {
   background: var(--accent);
   color: var(--bg);
   border-color: var(--accent);
+  transform: none;
 }
 
 .rail-arrow:disabled {
@@ -838,41 +866,75 @@ html.player-fs body {
   display: none;
 }
 
+/* Bare type over the picture - the Sanem signature glow does the work of a
+   background. Reset the global button chrome rather than override it piecemeal. */
 .next-up-btn {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  align-items: center;
   min-height: 46px;
-  padding: 10px 16px;
-  background: rgba(6, 7, 16, 0.88);
-  color: #fff;
-  border: 1px solid var(--sanem-accent);
-  box-shadow:
-    0 0 12px color-mix(in srgb, var(--sanem-accent) 45%, transparent),
-    0 0 24px color-mix(in srgb, var(--sanem-accent) 22%, transparent);
+  padding: 8px 4px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   text-align: right;
+  transition: color 0.15s, text-shadow 0.15s, transform 0.15s;
 }
 
 .next-up-label {
-  font-size: 0.95rem;
+  font-size: clamp(1rem, 2.4vw, 1.25rem);
   font-weight: 700;
+  letter-spacing: 0.02em;
   color: var(--sanem-accent);
   line-height: 1.2;
+  text-shadow:
+    0 0 10px color-mix(in srgb, var(--sanem-accent) 65%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.85);
 }
 
-.next-up-title {
-  font-size: 0.8rem;
-  font-weight: 500;
+/* Hover / focus is the only affordance left once the box is gone. */
+.next-up-btn:hover,
+.next-up-btn:focus-visible {
+  transform: scale(1.06);
+}
+
+.next-up-btn:hover .next-up-label,
+.next-up-btn:focus-visible .next-up-label {
   color: #fff;
-  max-width: 16rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+  text-shadow:
+    0 0 14px var(--sanem-accent),
+    0 0 30px color-mix(in srgb, var(--sanem-accent) 55%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.85);
 }
 
-.next-up-title[hidden] {
-  display: none;
+/* Which episode is playing, over the picture, no plate behind it. */
+.episode-badge {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  z-index: 5;
+  pointer-events: none;
+  font-size: clamp(1.5rem, 4.5vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  color: var(--sanem-accent);
+  text-shadow:
+    0 0 12px color-mix(in srgb, var(--sanem-accent) 70%, transparent),
+    0 0 28px color-mix(in srgb, var(--sanem-accent) 35%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.9);
+  transition: opacity 0.6s ease;
+}
+
+/* Keep clear of the cast button, which owns the same corner when offered. */
+.player-container:has(.cast-btn:not([hidden])) .episode-badge {
+  right: calc(max(12px, env(safe-area-inset-right, 0px)) + 54px);
+}
+
+.episode-badge.is-gone {
+  opacity: 0;
 }
 
 .control-bar {
@@ -996,11 +1058,6 @@ button.center-play:focus-visible {
   flex-shrink: 0;
 }
 
-.speed {
-  font-size: 0.9rem;
-  flex-shrink: 0;
-}
-
 .time-display {
   font-variant-numeric: tabular-nums;
   font-size: 0.85rem;
@@ -1058,8 +1115,7 @@ button.center-play:focus-visible {
   accent-color: var(--accent);
 }
 
-.ctl,
-.speed {
+.ctl {
   flex-shrink: 0;
 }
 
@@ -1087,8 +1143,7 @@ button.center-play:focus-visible {
   .rail-track {
     grid-auto-columns: 38vw;
   }
-  .volume,
-  .speed {
+  .volume {
     display: none;
   }
   .ctl {
