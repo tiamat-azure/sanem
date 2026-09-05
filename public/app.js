@@ -37,15 +37,15 @@ let activePlayer = null;
 // The toggle advertises the theme it switches *to*, icon included.
 function themeAction(theme) {
   return theme === 'dark'
-    ? { label: 'Thème clair', icon: '☀️' }
-    : { label: 'Thème obscur', icon: '🌙' };
+    ? { label: 'Thème clair', icon: 'i-sun' }
+    : { label: 'Thème obscur', icon: 'i-moon' };
 }
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem(THEME_KEY, theme);
   const { label, icon } = themeAction(theme);
   themeToggle.querySelector('.menu-label').textContent = label;
-  themeToggle.querySelector('.menu-icon').textContent = icon;
+  themeToggle.querySelector('.menu-icon use').setAttribute('href', `#${icon}`);
 }
 applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
 themeToggle.addEventListener('click', () => {

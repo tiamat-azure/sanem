@@ -1,0 +1,13 @@
+<!-- Sanem mark: the drop (upload arrow) over the watch (play triangle).
+     Standalone copy of the #i-sanem symbol, sized for a 16px tab slot: the
+     rounded frame is dropped because it turns to mush at that size. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path
+    d="M12 4v7.4M8.4 7.6L12 4l3.6 3.6"
+    stroke="#ff2ee6"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path d="M8.4 13.2l7.6 4.4-7.6 4.4z" fill="#00f0ff" />
+</svg>

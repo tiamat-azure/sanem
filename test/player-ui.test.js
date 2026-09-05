@@ -1495,6 +1495,74 @@ uiTest('center tap does not play while the series-end overlay is showing', async
   assert.equal(ui.centerPlay, false);
 });
 
+uiTest('the shell uses the Sanem mark and one SVG icon family, no emoji', async (t) => {
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+  const brand = await evaluate(
+    send,
+    `(function(){
+      const marks = [...document.querySelectorAll('.brand-mark')];
+      return {
+        count: marks.length,
+        allSanem: marks.every((m) => m.querySelector('use')?.getAttribute('href') === '#i-sanem'),
+        symbolExists: Boolean(document.querySelector('symbol#i-sanem')),
+      };
+    })()`
+  );
+  assert.ok(brand.count >= 2, 'the mark is on the header and the login card');
+  assert.equal(brand.allSanem, true);
+  assert.equal(brand.symbolExists, true, 'the #i-sanem symbol must be in the sprite');
+
+  const icons = await evaluate(
+    send,
+    `(function(){
+      // Every icon slot must be an <svg><use href="#i-*"> resolving to a real symbol.
+      const hosts = [...document.querySelectorAll('.ico')];
+      const bad = hosts.filter((el) => {
+        if (el.tagName.toLowerCase() !== 'svg') return true;
+        const href = el.querySelector('use')?.getAttribute('href') || '';
+        return !href.startsWith('#i-') || !document.querySelector('symbol' + href);
+      });
+      // No emoji anywhere in the chrome: they cannot follow the theme.
+      // Codepoint scan rather than a unicode property class, which would need
+      // escaping twice to survive this template literal.
+      const isEmoji = (cp) =>
+        (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x2600 && cp <= 0x27bf);
+      const chrome = [
+        document.querySelector('.app-header'),
+        document.querySelector('.player-container'),
+      ].filter(Boolean);
+      const withEmoji = chrome.filter((el) =>
+        [...(el.innerText || '')].some((ch) => isEmoji(ch.codePointAt(0)))
+      );
+      return { hosts: hosts.length, bad: bad.length, withEmoji: withEmoji.length };
+    })()`
+  );
+  assert.ok(icons.hosts >= 6, `expected the icon family to be in use, saw ${icons.hosts}`);
+  assert.equal(icons.bad, 0, 'every .ico must be an <svg> pointing at an existing #i-* symbol');
+  assert.equal(icons.withEmoji, 0, 'no emoji left in the header or the player chrome');
+});
+
+uiTest('the theme toggle swaps its icon with the theme it offers', async (t) => {
+  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+  const read = `(function(){
+    const btn = document.getElementById('theme-toggle');
+    return {
+      theme: document.documentElement.dataset.theme,
+      label: btn.querySelector('.menu-label').textContent,
+      icon: btn.querySelector('.menu-icon use').getAttribute('href'),
+    };
+  })()`;
+  const dark = await evaluate(send, read);
+  assert.equal(dark.theme, 'dark');
+  assert.equal(dark.label, 'Thème clair');
+  assert.equal(dark.icon, '#i-sun', 'dark theme offers the sun');
+  await evaluate(send, 'document.getElementById("theme-toggle").click()');
+  const light = await evaluate(send, read);
+  assert.equal(light.theme, 'light');
+  assert.equal(light.label, 'Thème obscur');
+  assert.equal(light.icon, '#i-moon', 'light theme offers the moon');
+});
+
 uiTest('episode number is shown bare over the picture at the start', async (t) => {
   const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
   await loopAndPlay(send);
@@ -2290,11 +2358,28 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   );
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
-  // The mint is deliberately slowed by 2 s (slowCastUrlMs); the default 10 s
-  // budget leaves too little margin when the whole suite loads the machine.
-  // Observed >20 s once under a full-suite run, hence the wide budget: the
-  // assertion below is what fails a real regression, not this deadline.
-  await waitFor(send, '(window.__remotePrompts ?? 0) >= 1', 45000);
+  // The mint is deliberately slowed by 2 s (slowCastUrlMs), so this normally
+  // settles in ~3 s. It has twice hung past 20 s during a heavily loaded
+  // parallel run and could not be reproduced afterwards (4 clean full-suite
+  // runs, plus the file on its own): cause unknown. Hence the wide deadline
+  // plus the page dump below - the next occurrence should say why rather than
+  // just time out.
+  try {
+    await waitFor(send, '(window.__remotePrompts ?? 0) >= 1', 45000);
+  } catch (err) {
+    const diag = await evaluate(
+      send,
+      `JSON.stringify({
+        prompts: window.__remotePrompts ?? null,
+        fetches: (window.__castUrlFetchCache || []).length,
+        ready: document.querySelector('.cast-btn')?.getAttribute('data-cast-ready') ?? null,
+        hidden: document.querySelector('.cast-btn')?.hidden ?? null,
+        vis: document.visibilityState,
+        src: (document.querySelector('video')?.getAttribute('src') || '').slice(0, 80),
+      })`
+    );
+    throw new Error(`${err.message} | DIAG ${diag}`);
+  }
   const ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.remotePrompts >= 1, 'same gesture must prompt once mint succeeds');
   assert.match(ui.videoSrc, /[?&]sig=/);

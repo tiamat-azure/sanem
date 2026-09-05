@@ -135,6 +135,24 @@ export function clearPosition(path) {
   localStorage.removeItem(WATCHED_PREFIX + path);
 }
 
+// Icons come from the #i-* sprite in index.html: one stroked 24x24 family shared
+// by the shell and the player, recoloured through currentColor.
+function icon(id) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'ico');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(NS, 'use');
+  use.setAttribute('href', `#${id}`);
+  svg.appendChild(use);
+  return svg;
+}
+
+function setIcon(host, id) {
+  const use = host.querySelector('use');
+  if (use) use.setAttribute('href', `#${id}`);
+}
+
 function el(tag, cls, attrs = {}) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -189,7 +207,7 @@ export function mountPlayer(root, { file, next, onNext }) {
     type: 'button',
     'aria-label': 'Lire',
   });
-  centerPlay.textContent = '▶';
+  centerPlay.appendChild(icon('i-play'));
 
   const bar = el('div', 'control-bar');
 
@@ -203,18 +221,19 @@ export function mountPlayer(root, { file, next, onNext }) {
   time.textContent = '0:00 / 0:00';
 
   const btnMute = el('button', 'ctl', { type: 'button', 'aria-label': 'Couper le son' });
-  btnMute.textContent = '🔊';
+  btnMute.appendChild(icon('i-volume'));
   const volume = el('input', 'volume', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume' });
 
   const btnNext = el('button', 'ctl ctl-next', {
     type: 'button',
     'aria-label': 'Épisode suivant',
   });
-  btnNext.textContent = 'Épisode suivant';
+  btnNext.append(icon('i-next'), el('span', 'ctl-next-label'));
+  btnNext.querySelector('.ctl-next-label').textContent = 'Épisode suivant';
   btnNext.hidden = !next;
 
   const btnFull = el('button', 'ctl', { type: 'button', 'aria-label': 'Plein écran' });
-  btnFull.textContent = '⛶';
+  btnFull.appendChild(icon('i-fullscreen'));
 
   const btnCast = el('button', 'ctl cast-btn', {
     type: 'button',
@@ -316,7 +335,7 @@ export function mountPlayer(root, { file, next, onNext }) {
       progBuffer.style.width = d ? `${(bEnd / d) * 100}%` : '0%';
     }
     time.textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
-    btnMute.textContent = video.muted || video.volume === 0 ? '🔇' : '🔊';
+    setIcon(btnMute, video.muted || video.volume === 0 ? 'i-mute' : 'i-volume');
     const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
     centerPlay.hidden = !video.paused || atEnd || holdSeeking;
     centerPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');

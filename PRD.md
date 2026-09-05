@@ -111,7 +111,8 @@ sanem/
 │   ├── thumbs.js             # extraction et cache des vignettes (§10)
 │   └── cleanup.js            # nettoyage de tmp/ et purge du cache transcode/ (§7)
 ├── public/
-│   ├── index.html            # page unique
+│   ├── index.html            # page unique + sprite d'icônes #i-* (§11.5)
+│   ├── favicon.svg           # marque Sanem, variante 16 px (§11.5)
 │   ├── app.js                # routeur d'écrans, dépôt Uppy, vidéothèque
 │   ├── player.js             # lecteur vidéo : contrôles, zones tactiles, épisode suivant
 │   └── style.css             # thème néon + points de rupture responsive
@@ -678,6 +679,23 @@ page utilise `clamp()` et `minmax()`, pas des largeurs fixes.
 
 Les rangées de vignettes utilisent `scroll-snap-type: x mandatory`. La demi-vignette
 coupée en bord d'écran est **volontaire** : elle signale qu'on peut faire défiler.
+
+### 11.5 Marque et famille d'icônes
+
+La marque **Sanem** est un signe unique qui raconte les deux parcours : une **flèche
+montante** (Putum, le dépôt) posée sur un **triangle de lecture** (Lukluk, le
+visionnage), inscrits dans un carré arrondi. La flèche prend `--accent-2` (magenta), le
+triangle `--accent` (cyan) : aucune couleur nouvelle n'est introduite. Elle apparaît dans
+l'en-tête, sur l'écran de connexion et comme favicon (`favicon.svg`, variante sans cadre,
+lisible à 16 px).
+
+Toutes les icônes de l'interface appartiennent à **une seule famille** : tracé sur une
+grille **24 × 24**, `fill: none`, `stroke: currentColor`, épaisseur 2, extrémités et
+jointures arrondies. Elles sont déclarées une fois en `<symbol id="i-*">` dans un sprite
+SVG inerte de `index.html`, puis instanciées par `<use href="#i-*">`. **Aucun emoji,
+aucune police d'icônes, aucun asset matriciel** : un emoji ne se recolore pas et son rendu
+change d'un système à l'autre, ce qui interdit l'accord avec le thème néon et sa bascule
+clair / obscur.
 
 ## 12. Tests
 

@@ -185,11 +185,53 @@ button[type='submit'] {
   z-index: 20;
 }
 
+/* The sprite is a definition store, never painted. */
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* One size for the whole icon family; stroke colour follows the text. */
+.ico {
+  width: 1.35em;
+  height: 1.35em;
+  flex: 0 0 auto;
+  fill: none;
+  color: inherit;
+}
+
+/* Sanem mark: cyan play, magenta drop - the two accents of the theme. */
+.brand-mark {
+  width: 1.5em;
+  height: 1.5em;
+  flex: 0 0 auto;
+  color: var(--accent);
+  --brand-drop: var(--accent-2);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 55%, transparent));
+}
+
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-size: 1.3rem;
   font-weight: 700;
   color: var(--text);
   text-shadow: var(--glow) var(--accent-2);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.login-brand .brand-mark {
+  width: 1.15em;
+  height: 1.15em;
 }
 
 .header-actions {
@@ -198,6 +240,9 @@ button[type='submit'] {
 }
 
 #app-menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 44px;
   min-height: 44px;
   padding: 0;
@@ -241,12 +286,12 @@ button[type='submit'] {
   min-height: 44px;
 }
 
-/* Fixed-width gutter so every label starts on the same x, whatever the glyph. */
+/* Fixed-width gutter so every label starts on the same x, whatever the icon. */
 .menu-icon {
-  flex: 0 0 1.5rem;
-  text-align: center;
-  font-size: 1.05rem;
-  line-height: 1;
+  width: 1.4rem;
+  height: 1.4rem;
+  flex: 0 0 1.4rem;
+  color: var(--accent);
 }
 
 .app-menu-item.is-active {
@@ -318,7 +363,10 @@ main {
 }
 
 .tile-icon {
-  font-size: clamp(2rem, 8vw, 3.5rem);
+  width: clamp(2rem, 8vw, 3.5rem);
+  height: clamp(2rem, 8vw, 3.5rem);
+  color: var(--accent);
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 45%, transparent));
 }
 
 .tile-term {
@@ -1026,6 +1074,15 @@ button.cast-btn:hover {
     0 4px 24px rgba(0, 0, 0, 0.7);
 }
 
+.center-play .ico {
+  width: 0.9em;
+  height: 0.9em;
+  filter:
+    drop-shadow(0 0 10px var(--sanem-accent))
+    drop-shadow(0 0 26px color-mix(in srgb, var(--sanem-accent) 70%, transparent))
+    drop-shadow(0 4px 20px rgba(0, 0, 0, 0.7));
+}
+
 button.center-play:hover {
   transform: translate(-50%, -50%);
   background: transparent;
@@ -1051,7 +1108,15 @@ button.center-play:focus-visible {
   border-radius: 10px;
 }
 
+.ctl .ico {
+  width: 24px;
+  height: 24px;
+}
+
 .ctl-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 0.85rem;
   font-weight: 600;
   white-space: nowrap;
@@ -1151,14 +1216,16 @@ button.center-play:focus-visible {
     min-height: 44px;
   }
   .ctl-next {
-    font-size: 0;
     min-width: 44px;
     width: 44px;
     padding: 0;
   }
-  .ctl-next::after {
-    content: '⏭';
-    font-size: 20px;
+  .ctl-next-label {
+    display: none;
+  }
+  .ctl .ico {
+    width: 20px;
+    height: 20px;
   }
   .time-display {
     font-size: 0.75rem;

@@ -51,7 +51,7 @@ require them (missing binary => `playback: "none"`).
 - `src/transcode.js` - `ffprobe`, compat matrix, on-demand segmented HLS (PRD §10).
 - `src/thumbs.js` - thumbnail extraction + cache (PRD §10.6).
 - `src/cleanup.js` - `tmp/` safety-net sweep + `transcode/` LRU purge (PRD §7).
-- `public/` - `index.html` + `app.js` (screen router, Uppy dashboard, library, series
+- `public/` - `index.html` (page + `#i-*` SVG icon sprite) + `favicon.svg` + `app.js` (screen router, Uppy dashboard, library, series
   hero + episode rail) + `player.js` (custom controls, touch zones, next episode,
   watch-state persistence) + `style.css` (neon theme).
 - `test/` - `filename.test.js`, `media.test.js`, `resume.test.js`, `player-ui.test.js`
@@ -66,6 +66,8 @@ Full API table, storage layout, transcode matrix: PRD §6-10.
   hls.js load via pinned CDN `<script>` in `public/index.html`.
 - `package.json` versions pinned exactly (no `^`/`~`); no new npm dep in v3.
 - Comments and code in English; UI copy in French (PRD §2).
+- Icons: one stroked 24x24 SVG family declared once as `<symbol id="i-*">` in
+  `index.html`, instantiated with `<use href="#i-*">`. No emoji, no icon font (PRD §11.5).
 - `ffmpeg`/`ffprobe` via `execFile` with an argument array, never a shell string.
 
 ## Tests
@@ -121,6 +123,10 @@ One line each; full rationale in PRD §13.
   persistent `sanem-done:` marker tells them apart (PRD §10.8). Never clear it alongside
   the position, or the series rail loses its anchor.
 - At most `SANEM_FFMPEG_CONCURRENCY` (default 1) ffmpeg processes: uploads come first.
+- `button:hover` lifts by `translateY(-1px)` globally: anything centred with a
+  `transform` (the rail arrows) must be centred another way, or it jumps on hover.
+- The player toolbar has no playback-rate control; `NEXT_UP_LEAD_S` is 120 s and the
+  episode badge retires itself after `EPISODE_BADGE_MS`.
 
 ## Configuration
 
