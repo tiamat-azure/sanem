@@ -9,6 +9,7 @@ import {
   loadWatchedAt,
   watchState,
   episodeLabel,
+  seriesSiblings,
 } from './player.js';
 
 const THEME_KEY = 'sanem-theme';
@@ -140,13 +141,6 @@ function seriesList(files) {
   return [...map.entries()]
     .map(([dir, items]) => ({ dir, items: [...items].sort(byName) }))
     .sort((a, b) => collator.compare(a.dir, b.dir));
-}
-
-function nextEpisode(file, files) {
-  if (!file.dir) return null;
-  const siblings = files.filter((f) => f.dir === file.dir);
-  const idx = siblings.findIndex((f) => f.path === file.path);
-  return idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
 }
 
 // --- thumbnail element with graceful fallback ---
@@ -531,11 +525,12 @@ function renderPlayer(path) {
   }
   back.href = file.dir ? `#/lukluk/serie/${encodeURIComponent(file.dir)}` : '#/lukluk';
 
-  const next = nextEpisode(file, filesCache);
+  const { prev, next } = seriesSiblings(file, filesCache);
   const start = () => {
     warning.hidden = true;
     activePlayer = mountPlayer(rootEl, {
       file,
+      prev,
       next,
       onNext: (nf) => {
         if (nf) location.hash = `#/lukluk/play/${encodeURIComponent(nf.path)}`;

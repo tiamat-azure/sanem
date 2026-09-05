@@ -522,17 +522,17 @@ Conséquence directe, à assumer dans l'UI plutôt qu'à masquer :
 - **Repère d'épisode** : à l'ouverture d'un épisode, son numéro (« Épisode 18 », déduit du
   motif `…S04E18…` du nom de fichier) s'affiche en grand **en haut à droite de l'image**,
   dans la couleur et la graisse signature Sanem, **sans cartouche ni fond**. Il s'efface
-  seul au bout de ~10 s. L'enchaînement automatique laisserait sinon le spectateur sans
+  seul au bout de **5 s**. L'enchaînement automatique laisserait sinon le spectateur sans
   aucun repère sur l'épisode en cours.
-- **Libellé « Épisode suivant »** : en bas à droite, même traitement typographique nu, et
-  proposé pendant les **2 dernières minutes**. Le survol le souligne et l'agrandit pour
-  signaler qu'il est cliquable ; un clic bascule immédiatement sur l'épisode suivant.
-- Le « suivant » est le fichier suivant **dans le même dossier**, selon l'ordre de
-  `GET /api/files` (§8) : alphabétique, locale-aware et numérique. Cet ordre fait passer
-  correctement `S01E09` avant `S01E10`.
+- **Épisode précédent / suivant** : icônes skip-back / skip-forward appariées (famille
+  §11.5), **sans libellé visible**. Tooltip « Épisode précédent » / « Épisode suivant » au
+  survol. Le précédent n'est proposé que s'il existe un fichier précédent **dans le même
+  dossier**, selon l'ordre de `GET /api/files` (§8) : alphabétique, locale-aware et
+  numérique (`S01E09` avant `S01E10`). Un fichier à la racine de `uploads/` n'a ni
+  précédent ni suivant. Le chip bas-droit des 2 dernières minutes reprend les mêmes
+  icônes (précédent à gauche du suivant, masqué s'il n'y a pas de précédent).
 - Arrivé au dernier fichier d'un dossier, la lecture **s'arrête** et l'UI propose de
   revenir à la série. Elle ne déborde jamais sur le dossier voisin.
-- Un fichier à la racine de `uploads/` n'a pas de suivant.
 
 ### 10.8 Positions de reprise
 
@@ -633,8 +633,8 @@ déjà disponible.
 | Volume               | `video.volume` + coupure du son, persisté en `localStorage`.                                                                                                                          |
 | Vitesse              | Retiré de la barre : `playbackRate` n'est pas exposé (fonction non utilisée). À réintroduire uniquement sur demande.                                                                   |
 | Sous-titres          | Si un `.srt` ou `.vtt` de même nom a été déposé dans le même dossier, ou si `ffprobe` a détecté une piste interne, extraite par ffmpeg.                                               |
-| Épisode suivant      | Libellé nu en bas à droite (pas de cartouche), affiché dans les 2 dernières minutes (§10.7). Le bouton de la barre reste étiqueté en toutes lettres.                                   |
-| Plein écran          | Fullscreen API **sur le conteneur**, jamais sur `<video>`, sinon la barre maison disparaît. Touches <kbd>F</kbd> et <kbd>Échap</kbd>. Sur téléphone : si l'API ou `orientation.lock` échoue, repli CSS qui étend la vidéo sur le grand côté (paysage). |
+| Épisode précédent / suivant | Icônes skip-back / skip-forward, sans texte visible. Tooltip « Épisode précédent » / « Épisode suivant ». Le précédent est masqué sur le premier épisode et hors série. Chip bas-droit en fin d'épisode : mêmes icônes, précédent à gauche du suivant. |
+| Plein écran          | Fullscreen API **sur le conteneur**, jamais sur `<video>`, sinon la barre maison disparaît. Touches <kbd>F</kbd> et <kbd>Échap</kbd>. Icône d'entrée hors plein écran, icône de sortie (flèches rentrantes) une fois en plein écran **natif ou overlay**. Tooltips « Plein écran » / « Quitter le plein écran ». Sur téléphone : si l'API ou `orientation.lock` échoue, repli CSS qui étend la vidéo sur le grand côté (paysage). |
 
 **Barre overlay : une seule ligne**, y compris sous 390 px. `flex-wrap: nowrap`. Les
 boutons ±10 s n'y figurent pas. Un clic / tap sur la surface vidéo **masque** la barre ;
@@ -642,8 +642,9 @@ un second la **réaffiche**. Elle se masque aussi seule après 3 s d'inactivité
 
 **Dimensionnement imposé** : cibles de **46 px minimum** pour les icônes de la barre (44
 px sous 640 px de large, pour tenir sur une ligne). Glyphe à 24 px (20 px sous 640 px).
-Une barre à 16 px n'est pas acceptable. Le bouton « Épisode suivant » reste labellisé
-(`aria-label`) et peut se compacte en icône sous 640 px pour ne pas passer à la ligne.
+Une barre à 16 px n'est pas acceptable. Les boutons « Épisode précédent » / « Épisode
+suivant » restent labellisés (`aria-label` + tooltip) et sont **toujours** des icônes, y
+compris hors 640 px, pour tenir sur une ligne.
 
 **Zones tactiles**, dans l'esprit des lecteurs mobiles usuels :
 
