@@ -51,10 +51,12 @@ require them (missing binary => `playback: "none"`).
 - `src/transcode.js` - `ffprobe`, compat matrix, on-demand segmented HLS (PRD §10).
 - `src/thumbs.js` - thumbnail extraction + cache (PRD §10.6).
 - `src/cleanup.js` - `tmp/` safety-net sweep + `transcode/` LRU purge (PRD §7).
-- `public/` - `index.html` + `app.js` (screen router, Uppy dashboard, library) +
-  `player.js` (custom controls, touch zones, next episode) + `style.css` (neon theme).
+- `public/` - `index.html` + `app.js` (screen router, Uppy dashboard, library, series
+  hero + episode rail) + `player.js` (custom controls, touch zones, next episode,
+  watch-state persistence) + `style.css` (neon theme).
 - `test/` - `filename.test.js`, `media.test.js`, `resume.test.js`, `player-ui.test.js`
-  (Chrome E2E for the player overlay and phone fullscreen).
+  (Chrome E2E for the player overlay and phone fullscreen), `serie-ui.test.js` (Chrome
+  E2E for the series hero + rail), `helpers/browser.js` (shared CDP harness).
 
 Full API table, storage layout, transcode matrix: PRD §6-10.
 
@@ -79,6 +81,10 @@ Full API table, storage layout, transcode matrix: PRD §6-10.
 - `test/player-ui.test.js` - system Chrome via CDP: smartphone portrait + landscape
   viewports, overlay toggle, single-row toolbar, hamburger chrome, fullscreen covers
   the long edge. Needs `google-chrome` / Chromium on the machine; no extra npm dep.
+- `test/serie-ui.test.js` - series screen: Lire / Reprendre / Revoir verb, seen badge and
+  resume bar mirrored on the hero poster, where the rail starts, hover-only arrows.
+- `test/helpers/browser.js` - the CDP harness both UI suites share (ephemeral server with
+  a seeded probe cache, Chrome launch, `evaluate` / `waitFor` / `clickSelector`).
 
 ## Known pitfalls
 
@@ -111,6 +117,9 @@ One line each; full rationale in PRD §13.
   90° rotate only if native rejects or is a no-op; never rotate native fullscreen.
 - Global `[hidden] { display: none !important }` is required: component rules set
   `display: flex/grid` and would otherwise beat the bare `hidden` attribute.
+- A finished media has no resume position, exactly like one never started: only the
+  persistent `sanem-done:` marker tells them apart (PRD §10.8). Never clear it alongside
+  the position, or the series rail loses its anchor.
 - At most `SANEM_FFMPEG_CONCURRENCY` (default 1) ffmpeg processes: uploads come first.
 
 ## Configuration
