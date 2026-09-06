@@ -9,7 +9,6 @@ import {
   isAllowedCastSrc,
   shouldShowNextEpisode,
   NEXT_UP_LEAD_S,
-  EPISODE_BADGE_MS,
   BAR_HIDE_MS,
   POINTER_MOVE_MIN_PX,
   notePointerPosition,
@@ -18,7 +17,6 @@ import {
   episodeLabel,
   episodeRibbon,
   seriesSiblings,
-  scheduleBadgeHide,
   TIP_MUTE,
   TIP_UNMUTE,
   TIP_VOLUME,
@@ -253,7 +251,7 @@ const SNAPSHOT = `({
       text: (el.textContent || '').trim(),
       hidden: el.hidden,
       hasBand: Boolean(band),
-      gone: el.classList.contains('is-gone'),
+      gone: Number(st.opacity) === 0,
       opacity: Number(st.opacity),
       // PRD §10.7: no plate, no border. The ribbon rails are background-image
       // layers, so both the badge and its band stay background-colour free.
@@ -459,6 +457,20 @@ const SNAPSHOT = `({
   })(),
 })`;
 
+const CHROME_AND_RIBBON_UP = `(function(){
+  const c = document.querySelector('.player-container');
+  const el = document.querySelector('.episode-badge');
+  if (!c || !el || el.hidden) return false;
+  return c.classList.contains('controls-visible') && Number(getComputedStyle(el).opacity) > 0.9;
+})()`;
+
+const CHROME_AND_RIBBON_DOWN = `(function(){
+  const c = document.querySelector('.player-container');
+  const el = document.querySelector('.episode-badge');
+  if (!c || !el || el.hidden) return false;
+  return !c.classList.contains('controls-visible') && Number(getComputedStyle(el).opacity) === 0;
+})()`;
+
 uiTest('player UI on a smartphone portrait viewport', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
 
@@ -555,19 +567,17 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   assert.equal(ui.toolbarPlay, false, 'no play/pause control on the bottom toolbar');
 
   await loopAndPlay(send);
-  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   await new Promise((r) => setTimeout(r, 1500));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false);
   assert.equal(ui.controlsVisible, true, 'toolbar must stay visible before the 2s hide delay');
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'ribbon stays with the toolbar before the hide delay');
   assert.equal(ui.centerPlay, false, 'center play icon is hidden while playing');
-  await waitFor(
-    send,
-    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
-    1500
-  );
+  await waitFor(send, CHROME_AND_RIBBON_DOWN, 1500);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'toolbar auto-hides 2s after playback starts');
+  assert.equal(ui.episodeBadge.gone, true, 'ribbon hides with the toolbar');
   assert.equal(ui.cursor.container, 'none', 'cursor hides with the toolbar');
   assert.equal(ui.cursor.video, 'none', 'video surface cursor hides with the toolbar');
   assert.equal(ui.paused, false);
@@ -576,9 +586,11 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'single tap must not pause until the double-tap window elapses');
   await waitForCenterTapDelay();
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, true, 'single surface tap still pauses after the double-tap delay');
   assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'ribbon returns with the toolbar');
   assert.notEqual(ui.cursor.container, 'none', 'cursor returns when chrome is shown');
   assert.equal(ui.centerPlay, true, 'paused state shows the center play icon');
   assert.equal(ui.centerPlayTag, 'BUTTON', 'center play must be a real button');
@@ -589,17 +601,16 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
 
   await tapVideoCenter(send);
   await waitForCenterTapDelay();
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'single surface tap on paused video still resumes');
   assert.equal(ui.centerPlay, false, 'center play icon hides once playing');
   assert.equal(ui.controlsVisible, true, 'toolbar is shown on resume');
-  await waitFor(
-    send,
-    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
-    3000
-  );
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'ribbon is shown on resume');
+  await waitFor(send, CHROME_AND_RIBBON_DOWN, 3000);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'toolbar fades 2s after resume');
+  assert.equal(ui.episodeBadge.gone, true, 'ribbon fades with the toolbar after resume');
   assert.equal(ui.cursor.container, 'none', 'cursor hides again after resume idle');
   assert.equal(ui.paused, false);
 });
@@ -727,19 +738,18 @@ uiTest('hold-to-seek shows center play if resume play is blocked', async (t) => 
 uiTest('mouse move reveals a hidden toolbar', async (t) => {
   const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   await loopAndPlay(send);
-  await waitFor(
-    send,
-    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
-    3000
-  );
+  await waitFor(send, CHROME_AND_RIBBON_DOWN, 3000);
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false);
+  assert.equal(ui.episodeBadge.gone, true, 'idle playback hides the ribbon with the toolbar');
   assert.equal(ui.cursor.container, 'none', 'idle playback hides the mouse cursor');
   assert.equal(ui.cursor.video, 'none');
   assert.equal(ui.paused, false);
   await mouseMoveOnPlayer(send);
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true, 'mouse pointermove must reveal a hidden toolbar');
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'mouse pointermove must reveal the ribbon too');
   assert.notEqual(ui.cursor.container, 'none', 'moving the mouse restores the cursor with chrome');
   assert.equal(ui.paused, false, 'revealing the bar with the mouse must not pause playback');
 });
@@ -934,7 +944,7 @@ uiTest('mouse pointerup does not blur a focused progress or volume control', asy
 uiTest('hovering the control bar holds it visible and clicks hit controls', async (t) => {
   const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   await loopAndPlay(send);
-  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   const box = await waitFor(
     send,
     `(function(){
@@ -961,6 +971,7 @@ uiTest('hovering the control bar holds it visible and clicks hit controls', asyn
   await new Promise((r) => setTimeout(r, 2500));
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true, 'bar must not time-hide under the cursor');
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'ribbon stays while hover holds the toolbar');
   assert.equal(ui.paused, false);
   const mutedBefore = await evaluate(send, 'Boolean(document.querySelector("video")?.muted)');
   assert.equal(mutedBefore, false);
@@ -970,6 +981,7 @@ uiTest('hovering the control bar holds it visible and clicks hit controls', asyn
   assert.equal(ui.paused, false, 'click on a bar control must not click-through to pause the surface');
   assert.equal(mutedAfter, true, 'click at the control coordinates must hit mute, not the video');
   assert.equal(ui.controlsVisible, true);
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'ribbon stays after a held-chrome click');
 });
 
 uiTest('leaving the control bar resumes auto-hide', async (t) => {
@@ -991,6 +1003,7 @@ uiTest('leaving the control bar resumes auto-hide', async (t) => {
   await new Promise((r) => setTimeout(r, 2500));
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true, 'hover must keep the bar up past the 2s timer');
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'hover must keep the ribbon up with the bar');
   await evaluate(
     send,
     `(function(){
@@ -1003,13 +1016,10 @@ uiTest('leaving the control bar resumes auto-hide', async (t) => {
       }));
     })()`
   );
-  await waitFor(
-    send,
-    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
-    3000
-  );
+  await waitFor(send, CHROME_AND_RIBBON_DOWN, 3000);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'pointerleave must restart the 2s auto-hide');
+  assert.equal(ui.episodeBadge.gone, true, 'ribbon hides when hover-held chrome finally drops');
   assert.equal(ui.paused, false);
 });
 
@@ -1991,6 +2001,7 @@ uiTest('the theme toggle swaps its icon with the theme it offers', async (t) => 
 uiTest('episode number is shown bare over the picture at the start', async (t) => {
   const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
   await loopAndPlay(send);
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   const ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.episodeBadge, 'episode badge must exist');
   assert.equal(ui.episodeBadge.hidden, false, 'a numbered episode gets a ribbon');
@@ -2010,16 +2021,45 @@ uiTest('episode number is shown bare over the picture at the start', async (t) =
   assert.equal(ui.episodeBadge.pointerEvents, 'none', 'badge must never eat a tap');
 });
 
-uiTest('episode number fades away on its own', async (t) => {
-  const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
+uiTest('episode ribbon follows toolbar show and hide', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
   await loopAndPlay(send);
-  await waitFor(
+  await waitFor(send, CHROME_AND_RIBBON_UP);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'toolbar is up after play');
+  assert.equal(ui.episodeBadge.gone, false, 'ribbon is up with the toolbar');
+  assert.ok(ui.episodeBadge.opacity > 0.9, `ribbon opacity ${ui.episodeBadge.opacity}`);
+
+  await waitFor(send, CHROME_AND_RIBBON_DOWN, 3000);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'toolbar auto-hides after idle');
+  assert.equal(ui.episodeBadge.gone, true, 'ribbon hides on the same idle path, not a 5s timer');
+
+  await mouseMoveOnPlayer(send);
+  await waitFor(send, CHROME_AND_RIBBON_UP);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'pointer move reveals the toolbar');
+  assert.ok(ui.episodeBadge.opacity > 0.9, 'pointer move reveals the ribbon with the toolbar');
+
+  await evaluate(
     send,
-    'document.querySelector(".episode-badge")?.classList.contains("is-gone") === true',
-    EPISODE_BADGE_MS + 4000
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerenter', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+      }));
+    })()`
   );
-  const ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.episodeBadge.gone, true, 'badge must retire without any user action');
+  await new Promise((r) => setTimeout(r, 5500));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'hover holds the toolbar past 5 s');
+  assert.ok(
+    ui.episodeBadge.opacity > 0.9,
+    'ribbon stays with held chrome; no independent 5 s auto-fade'
+  );
 });
 
 uiTest('next-episode label stays away until the last two minutes', async (t) => {
@@ -3755,18 +3795,6 @@ test('seriesSiblings follows the files collator inside one folder', () => {
     prev: null,
     next: null,
   });
-});
-
-test('episode badge hides after 5 seconds', (t) => {
-  assert.equal(EPISODE_BADGE_MS, 5000);
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const classes = new Set();
-  const badge = { classList: { add: (c) => classes.add(c) } };
-  scheduleBadgeHide(badge);
-  t.mock.timers.tick(EPISODE_BADGE_MS - 1);
-  assert.equal(classes.has('is-gone'), false, 'still visible just before 5 s');
-  t.mock.timers.tick(1);
-  assert.equal(classes.has('is-gone'), true, 'gone at 5 s');
 });
 
 test('cast src allowlist is same-origin relative /api/media or /api/hls only', () => {

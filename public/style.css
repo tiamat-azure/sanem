@@ -1000,7 +1000,9 @@ html.player-fs body {
   overflow: hidden;
   z-index: 5;
   pointer-events: none;
-  transition: opacity 0.6s ease;
+  /* Same show/hide path as the toolbar: opacity follows controls-visible. */
+  opacity: 0;
+  transition: opacity 0.2s;
 }
 
 /* The band itself. Its centre is placed on the corner bisector, so the ribbon
@@ -1039,8 +1041,8 @@ html.player-fs body {
     0 2px 8px rgba(0, 0, 0, 0.95);
 }
 
-.episode-badge.is-gone {
-  opacity: 0;
+.player-container.controls-visible .episode-badge:not([hidden]) {
+  opacity: 1;
 }
 
 .control-bar {
