@@ -519,11 +519,16 @@ Conséquence directe, à assumer dans l'UI plutôt qu'à masquer :
 
 ### 10.7 Enchaînement des épisodes
 
-- **Repère d'épisode** : à l'ouverture d'un épisode, son numéro (« Épisode 18 », déduit du
-  motif `…S04E18…` du nom de fichier) s'affiche en grand **en haut à droite de l'image**,
-  dans la couleur et la graisse signature Sanem, **sans cartouche ni fond**. Il s'efface
-  seul au bout de **5 s**. L'enchaînement automatique laisserait sinon le spectateur sans
-  aucun repère sur l'épisode en cours.
+- **Repère d'épisode** : à l'ouverture d'un épisode, son numéro (« ÉP. 18 », déduit du
+  motif `…S04E18…` du nom de fichier) s'affiche **en ruban diagonal dans le coin haut
+  gauche de l'image**, dans la couleur et la graisse signature Sanem, **sans cartouche ni
+  fond** : les deux filets qui bordent le ruban sont des couches `background-image`, jamais
+  une bordure ni un aplat, et seul un halo radial protège la lisibilité du texte sur une
+  image claire. Le ruban **ne dépasse jamais le quart de la hauteur de l'image**. Il
+  s'efface seul au bout de **5 s**. Un fichier **sans numéro d'épisode n'affiche aucun
+  ruban** : un nom de fichier complet ne tient pas dans une bande diagonale.
+  L'enchaînement automatique laisserait sinon le spectateur sans aucun repère sur
+  l'épisode en cours.
 - **Épisode précédent / suivant** : icônes skip-back / skip-forward appariées (famille
   §11.5), **sans libellé visible**. Tooltip « Épisode précédent » / « Épisode suivant » au
   survol. Le précédent n'est proposé que s'il existe un fichier précédent **dans le même

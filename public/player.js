@@ -230,9 +230,23 @@ export function abandonKeepFull() {
 // Episode label from a release-style filename ("…S04E14…" -> "Épisode 14").
 // Falls back to the bare filename when no marker is found, so neither the rail
 // nor the player badge ever shows an empty title.
+const EPISODE_RE = /(?:^|[^a-z0-9])(?:s\d{1,2})?e(\d{1,3})(?:[^0-9]|$)/i;
+
+export function episodeNumber(file) {
+  const m = EPISODE_RE.exec(file.name);
+  return m ? Number(m[1]) : null;
+}
+
 export function episodeLabel(file) {
-  const m = /(?:^|[^a-z0-9])(?:s\d{1,2})?e(\d{1,3})(?:[^0-9]|$)/i.exec(file.name);
-  return m ? `Épisode ${Number(m[1])}` : file.name;
+  const n = episodeNumber(file);
+  return n == null ? file.name : `Épisode ${n}`;
+}
+
+// The corner ribbon is narrow: it carries the abbreviated form, and nothing at
+// all for a file with no episode number - a full filename never fits a band.
+export function episodeRibbon(file) {
+  const n = episodeNumber(file);
+  return n == null ? null : `ÉP. ${n}`;
 }
 
 export function shouldShowNextEpisode(next, duration, currentTime) {
@@ -500,10 +514,18 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   const nextUpLabel = el('span', 'next-up-label');
   nextOverlay.append(prevBtnOverlay, nextBtnOverlay);
 
-  // Which episode am I on? Shown bare over the picture for the first seconds,
-  // then gone - auto-chaining otherwise drops the viewer with no bearing.
+  // Which episode am I on? A ribbon across the top-left corner for the first
+  // seconds, then gone - auto-chaining otherwise drops the viewer with no
+  // bearing. A file with no episode number gets no ribbon at all.
   const badge = el('div', 'episode-badge');
-  badge.textContent = episodeLabel(file);
+  const ribbon = episodeRibbon(file);
+  if (ribbon) {
+    const band = document.createElement('b');
+    band.textContent = ribbon;
+    badge.appendChild(band);
+  } else {
+    badge.hidden = true;
+  }
 
   container.append(video, touch, centerPlay, seekHint, badge, nextOverlay, bar, btnCast);
   root.appendChild(container);
@@ -771,14 +793,16 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     clearTimeout(badgeTimer);
     badgeTimer = scheduleBadgeHide(badge, ms);
   };
-  hideBadgeIn(EPISODE_BADGE_MS);
-  video.addEventListener(
-    'playing',
-    () => {
-      if (!badge.classList.contains('is-gone')) hideBadgeIn(EPISODE_BADGE_MS);
-    },
-    { once: true }
-  );
+  if (ribbon) {
+    hideBadgeIn(EPISODE_BADGE_MS);
+    video.addEventListener(
+      'playing',
+      () => {
+        if (!badge.classList.contains('is-gone')) hideBadgeIn(EPISODE_BADGE_MS);
+      },
+      { once: true }
+    );
+  }
   // Keep the chip clickable while the toolbar auto-hides (it is not inside the bar).
   nextOverlay.addEventListener('pointerdown', (e) => e.stopPropagation());
   nextOverlay.addEventListener('pointerup', (e) => e.stopPropagation());

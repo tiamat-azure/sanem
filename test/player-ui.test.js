@@ -16,6 +16,7 @@ import {
   pointInRect,
   pointerLeaveAbandonsChrome,
   episodeLabel,
+  episodeRibbon,
   seriesSiblings,
   scheduleBadgeHide,
   TIP_MUTE,
@@ -242,21 +243,32 @@ const SNAPSHOT = `({
   episodeBadge: (() => {
     const el = document.querySelector('.episode-badge');
     if (!el) return null;
+    const band = el.querySelector('b');
+    const box = el.closest('.player-container').getBoundingClientRect();
     const r = el.getBoundingClientRect();
     const st = getComputedStyle(el);
-    const bg = st.backgroundColor;
+    const bandSt = band ? getComputedStyle(band) : null;
+    const isClear = (c) => c === 'transparent' || c.replace(/ /g, '') === 'rgba(0,0,0,0)';
     return {
       text: (el.textContent || '').trim(),
+      hidden: el.hidden,
+      hasBand: Boolean(band),
       gone: el.classList.contains('is-gone'),
       opacity: Number(st.opacity),
+      // PRD §10.7: no plate, no border. The ribbon rails are background-image
+      // layers, so both the badge and its band stay background-colour free.
       bare:
-        (bg === 'transparent' || bg.replace(/ /g, '') === 'rgba(0,0,0,0)') &&
-        st.borderTopWidth === '0px',
-      bold: Number(st.fontWeight) >= 700,
-      fontSize: parseFloat(st.fontSize),
+        isClear(st.backgroundColor) &&
+        st.borderTopWidth === '0px' &&
+        (!bandSt || (isClear(bandSt.backgroundColor) && bandSt.borderTopWidth === '0px')),
+      bold: Number(bandSt ? bandSt.fontWeight : st.fontWeight) >= 700,
+      fontSize: parseFloat(bandSt ? bandSt.fontSize : st.fontSize),
+      rotated: Boolean(bandSt && bandSt.transform.startsWith('matrix')),
       pointerEvents: st.pointerEvents,
-      color: st.color,
-      inTopRight: r.top < window.innerHeight / 2 && r.right > window.innerWidth / 2,
+      color: bandSt ? bandSt.color : st.color,
+      inTopLeft: r.top < box.top + box.height / 2 && r.left < box.left + box.width / 2,
+      // Owner's call: the ribbon must not pass a quarter of the picture height.
+      heightRatio: r.height / box.height,
     };
   })(),
   nextUp: (() => {
@@ -1981,13 +1993,20 @@ uiTest('episode number is shown bare over the picture at the start', async (t) =
   await loopAndPlay(send);
   const ui = await evaluate(send, SNAPSHOT);
   assert.ok(ui.episodeBadge, 'episode badge must exist');
-  assert.equal(ui.episodeBadge.text, 'Épisode 1', 'badge reads the number off the filename');
+  assert.equal(ui.episodeBadge.hidden, false, 'a numbered episode gets a ribbon');
+  assert.equal(ui.episodeBadge.hasBand, true, 'the ribbon band is a <b> child');
+  assert.equal(ui.episodeBadge.text, 'ÉP. 1', 'ribbon reads the number off the filename');
   assert.equal(ui.episodeBadge.gone, false, 'badge is up at the start of the episode');
   assert.ok(ui.episodeBadge.opacity > 0.9, `badge opacity ${ui.episodeBadge.opacity}`);
   assert.equal(ui.episodeBadge.bare, true, 'badge must have no background and no border');
   assert.equal(ui.episodeBadge.bold, true, 'badge uses the bold Sanem signature');
-  assert.ok(ui.episodeBadge.fontSize >= 20, `badge is large, got ${ui.episodeBadge.fontSize}px`);
-  assert.equal(ui.episodeBadge.inTopRight, true, 'badge sits in the video top-right');
+  assert.equal(ui.episodeBadge.rotated, true, 'the band runs across the corner on a diagonal');
+  assert.ok(ui.episodeBadge.fontSize >= 12, `ribbon text too small: ${ui.episodeBadge.fontSize}px`);
+  assert.equal(ui.episodeBadge.inTopLeft, true, 'badge sits in the video top-left');
+  assert.ok(
+    ui.episodeBadge.heightRatio <= 0.26,
+    `ribbon must stay within a quarter of the picture, got ${ui.episodeBadge.heightRatio}`
+  );
   assert.equal(ui.episodeBadge.pointerEvents, 'none', 'badge must never eat a tap');
 });
 
@@ -3706,6 +3725,16 @@ test('episodeLabel reads the number off a release-style filename', () => {
   assert.equal(episodeLabel({ name: 'Dr.STONE.S04E18.MULTi.1080p.mkv' }), 'Épisode 18');
   assert.equal(episodeLabel({ name: 'e01.mp4' }), 'Épisode 1');
   assert.equal(episodeLabel({ name: 'film.mkv' }), 'film.mkv', 'no marker -> bare filename');
+});
+
+test('episodeRibbon abbreviates, and gives up when there is no episode number', () => {
+  assert.equal(episodeRibbon({ name: 'Dr.STONE.S04E18.MULTi.1080p.mkv' }), 'ÉP. 18');
+  assert.equal(episodeRibbon({ name: 'e01.mp4' }), 'ÉP. 1');
+  assert.equal(
+    episodeRibbon({ name: 'Le.Voyage.de.Chihiro.1080p.VOSTFR.mkv' }),
+    null,
+    'a filename never fits the band - no ribbon at all'
+  );
 });
 
 test('seriesSiblings follows the files collator inside one folder', () => {

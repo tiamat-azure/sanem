@@ -127,6 +127,13 @@ One line each; full rationale in PRD §13.
   `transform` (the rail arrows) must be centred another way, or it jumps on hover.
 - The player toolbar has no playback-rate control; `NEXT_UP_LEAD_S` is 120 s and the
   episode badge retires itself after `EPISODE_BADGE_MS`.
+- The episode badge is a corner ribbon sized in `cqh`, so `.player-container` carries
+  `container-type: size`. Every fullscreen state already sets width and height
+  explicitly - never let the container size itself from its content again.
+- The ribbon rails are `background-image` layers, never a `border` or a background
+  colour: PRD §10.7 still forbids a plate, and the E2E `bare` assertion checks it.
+- `episodeRibbon()` returns `null` with no `…E18…` marker and no ribbon is mounted; only
+  `episodeLabel()` falls back to the raw filename, for the library screens.
 
 ## Configuration
 

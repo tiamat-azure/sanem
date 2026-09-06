@@ -816,6 +816,10 @@ main {
 
 .player-container {
   position: relative;
+  /* Container queries drive the episode ribbon off the real picture height.
+     Every state below sets width and height explicitly, so size containment
+     is safe here. */
+  container-type: size;
   width: 100%;
   aspect-ratio: 16 / 9;
   max-height: calc(100dvh - 5.5rem);
@@ -980,28 +984,59 @@ html.player-fs body {
     0 2px 6px rgba(0, 0, 0, 0.85);
 }
 
-/* Which episode is playing, over the picture, no plate behind it. */
+/* Which episode is playing: a diagonal ribbon taking the top-left corner of
+   the picture. Still no plate and no border (PRD §10.7) - the two rails are
+   background-image layers, so the badge keeps a transparent background. */
 .episode-badge {
+  /* The ribbon never reaches past a quarter of the picture height. */
+  --reach: 25cqh;
+  --band: 5cqh;
+  --rail: max(1.5px, 0.35cqh);
   position: absolute;
-  top: max(10px, env(safe-area-inset-top, 0px));
-  right: max(12px, env(safe-area-inset-right, 0px));
+  top: env(safe-area-inset-top, 0px);
+  left: env(safe-area-inset-left, 0px);
+  width: var(--reach);
+  height: var(--reach);
+  overflow: hidden;
   z-index: 5;
   pointer-events: none;
-  font-size: clamp(1.5rem, 4.5vw, 2.4rem);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  line-height: 1.1;
-  color: var(--sanem-accent);
-  text-shadow:
-    0 0 12px color-mix(in srgb, var(--sanem-accent) 70%, transparent),
-    0 0 28px color-mix(in srgb, var(--sanem-accent) 35%, transparent),
-    0 2px 8px rgba(0, 0, 0, 0.9);
   transition: opacity 0.6s ease;
 }
 
-/* Keep clear of the cast button, which owns the same corner when offered. */
-.player-container:has(.cast-btn:not([hidden])) .episode-badge {
-  right: calc(max(12px, env(safe-area-inset-right, 0px)) + 54px);
+/* The band itself. Its centre is placed on the corner bisector, so the ribbon
+   meets both edges at --reach whatever the band thickness. */
+.episode-badge > b {
+  position: absolute;
+  display: block;
+  width: 80cqh;
+  height: var(--band);
+  line-height: var(--band);
+  left: calc((var(--reach) - 0.7071 * var(--band)) / 2 - 40cqh);
+  top: calc((var(--reach) - 0.7071 * var(--band)) / 2 - var(--band) / 2);
+  transform: rotate(-45deg);
+  text-align: center;
+  white-space: nowrap;
+  font-size: clamp(0.8rem, 5cqh, 2.2rem);
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  font-variant-numeric: tabular-nums;
+  color: var(--sanem-accent);
+  background-image:
+    linear-gradient(var(--sanem-accent), var(--sanem-accent)),
+    linear-gradient(var(--sanem-accent), var(--sanem-accent)),
+    radial-gradient(
+      58% 150% at 50% 50%,
+      rgba(4, 6, 14, 0.78) 0%,
+      rgba(4, 6, 14, 0.45) 55%,
+      transparent 78%
+    );
+  background-size: 100% var(--rail), 100% var(--rail), 100% 100%;
+  background-position: top left, bottom left, center;
+  background-repeat: no-repeat;
+  text-shadow:
+    0 0 10px color-mix(in srgb, var(--sanem-accent) 70%, transparent),
+    0 0 24px color-mix(in srgb, var(--sanem-accent) 35%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.95);
 }
 
 .episode-badge.is-gone {
