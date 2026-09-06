@@ -121,6 +121,9 @@ export function playerKeyCommand(e) {
     if (e.ctrlKey) return key === 'ArrowUp' ? 'unmute' : 'mute';
     return key === 'ArrowUp' ? 'volumeUp' : 'volumeDown';
   }
+  // P1a: PageUp/Down hop episodes even when the volume range is focused.
+  // Do not add an isRangeInput guard here; onKey preventDefault is enough
+  // to stop native range paging.
   if (key === 'PageDown') return 'nextEpisode';
   if (key === 'PageUp') return 'prevEpisode';
   if (key === 'f' || key === 'F') return 'toggleFull';

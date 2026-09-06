@@ -2694,6 +2694,47 @@ uiTest('volume range ArrowLeft/Right do not seek playback', async (t) => {
   assert.ok(before > 0.4, `ArrowLeft on volume must not seek -10s, currentTime=${before}`);
 });
 
+uiTest('PageDown hops episodes even when the volume range is focused', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  const before = await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.5';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.focus();
+      return {
+        volume: document.querySelector('video').volume,
+        hash: location.hash,
+        focused: document.activeElement === slider,
+      };
+    })()`
+  );
+  assert.equal(before.focused, true);
+  assert.equal(before.volume, 0.5);
+  assert.match(before.hash, /e01/);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'PageDown',
+        bubbles: true,
+        cancelable: true,
+      }));
+    })()`
+  );
+  await waitFor(send, 'location.hash.includes("e02") && Boolean(document.querySelector(".player-container .ctl-mute"))');
+  const after = await evaluate(
+    send,
+    `({ volume: document.querySelector('video').volume, hash: location.hash })`
+  );
+  assert.match(after.hash, /e02/, 'PageDown on a focused volume range must still hop');
+  assert.equal(after.volume, 0.5, 'native range PageDown must not change volume');
+});
+
 uiTest('mute click restores audio when silenced even if muted is false', async (t) => {
   const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
   await loopAndPlay(send);
@@ -3429,6 +3470,8 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(playerKeyCommand({ key: 'ArrowUp', target: range, ctrlKey: false, altKey: false }), 'volumeUp');
   assert.equal(playerKeyCommand({ key: 'ArrowDown', target: range, ctrlKey: false, altKey: false }), 'volumeDown');
   assert.equal(playerKeyCommand({ key: 'ArrowDown', target: range, ctrlKey: true, altKey: false }), 'mute');
+  assert.equal(playerKeyCommand({ key: 'PageDown', target: range }), 'nextEpisode');
+  assert.equal(playerKeyCommand({ key: 'PageUp', target: range }), 'prevEpisode');
   assert.equal(
     playerKeyCommand({ key: 'ArrowLeft', target: range, ctrlKey: false, altKey: false }),
     null,
