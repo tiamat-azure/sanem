@@ -27,7 +27,8 @@ const DONE_PREFIX = 'sanem-done:';
 export const DONE_RATIO = 0.95;
 const VOLUME_KEY = 'sanem-volume';
 const MUTED_KEY = 'sanem-muted';
-const BAR_HIDE_MS = 2000;
+export const BAR_HIDE_MS = 2000;
+export const POINTER_MOVE_MIN_PX = 1;
 // "Épisode suivant" label: offered for the last 2 minutes so the viewer can
 // skip the outro at will (PRD §10.7 also auto-chains on ended).
 export const NEXT_UP_LEAD_S = 120;
@@ -35,6 +36,42 @@ export const NEXT_UP_LEAD_S = 120;
 export const EPISODE_BADGE_MS = 5000;
 // Distinguish center single-tap pause from double-tap fullscreen.
 export const CENTER_DBLCLICK_MS = 300;
+
+// Gecko (Firefox on Ubuntu especially) fires pointermove on <video> with
+// unchanged clientX/Y while frames paint, and again when `cursor: none`
+// is applied. Those must not reset the idle timer or chrome never hides.
+export function notePointerPosition(prev, x, y, minPx = POINTER_MOVE_MIN_PX) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return { moved: false, pos: prev ?? null };
+  }
+  const next = { x, y };
+  if (prev == null || !Number.isFinite(prev.x) || !Number.isFinite(prev.y)) {
+    return { moved: false, pos: next };
+  }
+  const moved = Math.abs(x - prev.x) >= minPx || Math.abs(y - prev.y) >= minPx;
+  return { moved, pos: moved ? next : prev };
+}
+
+export function pointInRect(rect, x, y) {
+  if (!rect || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+  // Hidden/empty chrome (e.g. the unused cast button) reports a 0×0 box at
+  // (0,0). That must not count as "pointer still in chrome".
+  if (!(rect.right > rect.left) || !(rect.bottom > rect.top)) return false;
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+// pointerleave can fire while the pointer is still in bar/cast (Gecko
+// fullscreen / child hops / null relatedTarget). Only drop the last mouse
+// pixel when the leave is actually outside chrome geometry.
+export function pointerLeaveAbandonsChrome(relatedOverChrome, x, y, rects = []) {
+  if (relatedOverChrome) return false;
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    for (const r of rects) {
+      if (pointInRect(r, x, y)) return false;
+    }
+  }
+  return true;
+}
 
 // Hash teardown recreates the player. Carry FS intent across that remount
 // so next/prev (and ended auto-chain) stay in fullscreen. Overlay is
@@ -428,20 +465,43 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
 
   let hideTimer = null;
   let pointerInChrome = false;
+  let lastMouse = null;
   const chromeActivePointers = new Set();
-  const hoverHoldChrome = (node) =>
+  const fineHover = () =>
     window.matchMedia('(hover: hover)').matches &&
-    window.matchMedia('(pointer: fine)').matches &&
-    node.matches(':hover');
+    window.matchMedia('(pointer: fine)').matches;
+  const overChromeNode = (node, target) =>
+    Boolean(node && target && (target === node || node.contains(target)));
+  const overChrome = (target) => overChromeNode(bar, target) || overChromeNode(btnCast, target);
+  const pointOverNode = (node, x, y) => {
+    if (!node) return false;
+    const hit = document.elementFromPoint(x, y);
+    if (hit && overChromeNode(node, hit)) return true;
+    return pointInRect(node.getBoundingClientRect(), x, y);
+  };
+  // Last real mouse pixel over the bar/cast — Gecko :hover can stick after
+  // the pointer has left (fullscreen / video overlay), which used to hold
+  // chrome forever. Pointerenter still covers tests that send no coordinates.
+  const pointOverChrome = () => {
+    if (!fineHover() || lastMouse == null) return false;
+    return pointOverNode(bar, lastMouse.x, lastMouse.y) || pointOverNode(btnCast, lastMouse.x, lastMouse.y);
+  };
+  const focusHoldsChrome = () => {
+    const ae = document.activeElement;
+    if (!ae || !(bar.contains(ae) || btnCast.contains(ae))) return false;
+    // Mouse/pen click focus is not :focus-visible in Gecko/Blink, so it
+    // must not trap auto-hide. Keyboard Tab (and focus({focusVisible:true}))
+    // still holds chrome. Do not blur on pointerup: a scrub/volume click
+    // must leave the control focused for further keyboard use.
+    return ae.matches(':focus-visible');
+  };
   // Mouse/pen hover or an active pointer on overlay chrome holds
   // controls-visible so the 2s timer cannot hide it under the cursor/finger.
   const chromeHoldsVisible = () =>
     pointerInChrome ||
-    hoverHoldChrome(bar) ||
-    hoverHoldChrome(btnCast) ||
+    pointOverChrome() ||
     chromeActivePointers.size > 0 ||
-    (document.activeElement != null &&
-      (bar.contains(document.activeElement) || btnCast.contains(document.activeElement)));
+    focusHoldsChrome();
   const hideBar = () => {
     if (chromeHoldsVisible()) {
       // Keep re-arming so a hold that later releases (blur, pointerup)
@@ -455,8 +515,8 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     hideTimer = null;
     bar.inert = true;
     btnCast.inert = true;
-    // inert drops focus and tab order. Do not blur here: chromeHoldsVisible
-    // already keeps the bar up while it contains document.activeElement.
+    // inert drops focus and tab order. Do not blur here: :focus-visible
+    // already keeps the bar up while a keyboard-focused control is in it.
   };
   const showBar = () => {
     bar.inert = false;
@@ -467,6 +527,11 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     if (!video.paused) {
       hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
     }
+  };
+  const trackMouse = (e) => {
+    const { moved, pos } = notePointerPosition(lastMouse, e.clientX, e.clientY);
+    lastMouse = pos;
+    return moved;
   };
 
   video.addEventListener('timeupdate', () => {
@@ -1191,7 +1256,17 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   showBar();
   render();
   container.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'mouse') showBar();
+    // Touch slides must not reveal chrome. Empty pointerType is Gecko's
+    // compatibility mouse path.
+    if (e.pointerType === 'touch') return;
+    if (e.pointerType && e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
+    // Zero-delta (and the seed event) must not reset the idle timer.
+    // Still drop a stale pointerenter hold when the event is over video:
+    // Firefox often skips pointerleave in fullscreen / over <video>.
+    if (!overChrome(e.target)) pointerInChrome = false;
+    if (!trackMouse(e)) return;
+    if (!overChrome(e.target)) pointerInChrome = false;
+    showBar();
   });
   const bindChromeHold = (node) => {
     node.addEventListener('pointerdown', (e) => {
@@ -1199,7 +1274,12 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
       showBar();
     });
     node.addEventListener('pointermove', (e) => {
-      if (chromeActivePointers.has(e.pointerId) || e.buttons) showBar();
+      if (chromeActivePointers.has(e.pointerId)) {
+        showBar();
+        return;
+      }
+      if (!e.buttons) return;
+      if (trackMouse(e)) showBar();
     });
     node.addEventListener('pointerenter', (e) => {
       if (e.pointerType === 'touch') return;
@@ -1208,12 +1288,36 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     });
     node.addEventListener('pointerleave', (e) => {
       if (e.pointerType === 'touch') return;
+      const relatedOverChrome = overChrome(e.relatedTarget);
+      const rects = [bar, btnCast]
+        .filter((n) => !n.hidden)
+        .map((n) => n.getBoundingClientRect());
+      if (!pointerLeaveAbandonsChrome(relatedOverChrome, e.clientX, e.clientY, rects)) {
+        // Spurious leave, or hop bar <-> cast: keep lastMouse so
+        // pointOverChrome still holds while the pointer is in chrome.
+        if (relatedOverChrome) pointerInChrome = true;
+        if (
+          Number.isFinite(e.clientX) &&
+          Number.isFinite(e.clientY) &&
+          rects.some((r) => pointInRect(r, e.clientX, e.clientY))
+        ) {
+          lastMouse = { x: e.clientX, y: e.clientY };
+        }
+        showBar();
+        return;
+      }
       pointerInChrome = false;
+      lastMouse = null;
       showBar();
     });
     node.addEventListener('focusin', () => showBar());
     node.addEventListener('focusout', () => {
-      window.queueMicrotask(() => showBar());
+      window.queueMicrotask(() => {
+        // Auto-hide sets inert, which blurs a focused control. That focusout
+        // must not count as activity or the bar would show itself again (A1a).
+        if (!container.classList.contains('controls-visible')) return;
+        showBar();
+      });
     });
     node.addEventListener('keydown', () => showBar());
   };
