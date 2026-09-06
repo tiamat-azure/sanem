@@ -782,9 +782,9 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     video.muted = Boolean(muted);
     persistAudio();
   };
+  const isSilenced = () => video.muted || video.volume === 0;
   btnMute.addEventListener('click', () => {
-    const silenced = video.muted || video.volume === 0;
-    setMuted(!silenced);
+    setMuted(!isSilenced());
   });
   volume.addEventListener('input', () => {
     video.volume = Number(volume.value);
@@ -1660,7 +1660,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
         showBar();
         break;
       case 'unmute':
-        if (video.muted) setMuted(false);
+        if (isSilenced()) setMuted(false);
         showBar();
         break;
       case 'nextEpisode':

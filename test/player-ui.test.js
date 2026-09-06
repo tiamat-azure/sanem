@@ -2725,6 +2725,74 @@ uiTest('mute click restores audio when silenced even if muted is false', async (
   assert.equal(audio.label, TIP_MUTE);
 });
 
+uiTest('Ctrl+ArrowUp restores audio when silenced even if muted is false', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      const v = document.querySelector('video');
+      v.volume = 0;
+      v.muted = false;
+      v.dispatchEvent(new Event('volumechange'));
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_UNMUTE);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  const audio = await evaluate(
+    send,
+    `({
+      volume: document.querySelector('video').volume,
+      muted: document.querySelector('video').muted,
+      label: document.querySelector('.ctl-mute')?.getAttribute('aria-label'),
+    })`
+  );
+  assert.equal(audio.muted, false);
+  assert.equal(audio.volume, 0.4, 'Ctrl+ArrowUp must restore last audible when volume is 0');
+  assert.equal(audio.label, TIP_MUTE);
+});
+
+uiTest('Ctrl+ArrowUp restores audio when silenced even if muted is false', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      const v = document.querySelector('video');
+      v.volume = 0;
+      v.muted = false;
+      v.dispatchEvent(new Event('volumechange'));
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_UNMUTE);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  const audio = await evaluate(
+    send,
+    `({
+      volume: document.querySelector('video').volume,
+      muted: document.querySelector('video').muted,
+      label: document.querySelector('.ctl-mute')?.getAttribute('aria-label'),
+    })`
+  );
+  assert.equal(audio.muted, false);
+  assert.equal(audio.volume, 0.4, 'Ctrl+ArrowUp must restore last audible when volume is 0');
+  assert.equal(audio.label, TIP_MUTE);
+});
+
 uiTest('last audible volume survives remount after hitting 0', async (t) => {
   const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
   await loopAndPlay(send);
