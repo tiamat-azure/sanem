@@ -2448,6 +2448,17 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
   const fsTip = await evaluate(send, 'getComputedStyle(document.querySelector(".ctl-fs"), "::after").content');
   assert.match(fsTip, /Plein écran/);
   assert.match(fsTip, /raccourci : F/);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      if (!v) return;
+      v.muted = false;
+      if (!v.volume) v.volume = 0.8;
+      v.dispatchEvent(new Event('volumechange'));
+    })()`
+  );
+  ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.muteCtl.hasTip, true);
   assert.equal(ui.muteCtl.title, null, 'T1: no native title= on mute');
   assert.equal(ui.muteCtl.label, TIP_MUTE);
@@ -2461,6 +2472,15 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
 uiTest('mute toggle and fullscreen labels document their shortcuts', async (t) => {
   const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
   await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.muted = false;
+      v.volume = 0.8;
+      v.dispatchEvent(new Event('volumechange'));
+    })()`
+  );
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.muteCtl.label, TIP_MUTE);
   assert.equal(ui.fsLabel, TIP_FS_ENTER);
