@@ -525,7 +525,10 @@ Conséquence directe, à assumer dans l'UI plutôt qu'à masquer :
   fond** : les deux filets qui bordent le ruban sont des couches `background-image`, jamais
   une bordure ni un aplat, et seul un halo radial protège la lisibilité du texte sur une
   image claire. Le ruban **ne dépasse jamais le quart de la hauteur de l'image**. Il
-  s'efface seul au bout de **5 s**. Un fichier **sans numéro d'épisode n'affiche aucun
+  apparaît et disparaît **avec la barre de contrôle** (classe `controls-visible`) : même
+  révélation au pointeur / à l'interaction, même temporisation d'inactivité, même maintien
+  au survol ou au focus du chrome. Il n'a **pas** de disparition autonome (pas de 5 s
+  indépendantes). Un fichier **sans numéro d'épisode n'affiche aucun
   ruban** : un nom de fichier complet ne tient pas dans une bande diagonale.
   L'enchaînement automatique laisserait sinon le spectateur sans aucun repère sur
   l'épisode en cours.

@@ -126,7 +126,7 @@ One line each; full rationale in PRD §13.
 - `button:hover` lifts by `translateY(-1px)` globally: anything centred with a
   `transform` (the rail arrows) must be centred another way, or it jumps on hover.
 - The player toolbar has no playback-rate control; `NEXT_UP_LEAD_S` is 120 s and the
-  episode badge retires itself after `EPISODE_BADGE_MS`.
+  episode ribbon follows `controls-visible` (same show/hide path as the toolbar).
 - The episode badge is a corner ribbon sized in `cqh`, so `.player-container` carries
   `container-type: size`. Every fullscreen state already sets width and height
   explicitly - never let the container size itself from its content again.

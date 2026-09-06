@@ -32,8 +32,6 @@ export const POINTER_MOVE_MIN_PX = 1;
 // "Épisode suivant" label: offered for the last 2 minutes so the viewer can
 // skip the outro at will (PRD §10.7 also auto-chains on ended).
 export const NEXT_UP_LEAD_S = 120;
-// The episode number is a bearing, not a HUD: it fades out on its own.
-export const EPISODE_BADGE_MS = 5000;
 // Distinguish center single-tap pause from double-tap fullscreen.
 export const CENTER_DBLCLICK_MS = 300;
 // Same step as the volume <input type="range">.
@@ -274,13 +272,6 @@ export function seriesSiblings(file, files) {
   };
 }
 
-// Extracted so the 5 s hide can be asserted with fake timers without Chrome.
-export function scheduleBadgeHide(badge, delay = EPISODE_BADGE_MS) {
-  return setTimeout(() => {
-    badge.classList.add('is-gone');
-  }, delay);
-}
-
 function decodeCastSegment(seg) {
   let cur = seg;
   for (let i = 0; i < 4; i += 1) {
@@ -514,9 +505,10 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   const nextUpLabel = el('span', 'next-up-label');
   nextOverlay.append(prevBtnOverlay, nextBtnOverlay);
 
-  // Which episode am I on? A ribbon across the top-left corner for the first
-  // seconds, then gone - auto-chaining otherwise drops the viewer with no
-  // bearing. A file with no episode number gets no ribbon at all.
+  // Which episode am I on? A ribbon across the top-left corner, shown and
+  // hidden with the toolbar (controls-visible). Auto-chaining otherwise
+  // drops the viewer with no bearing. A file with no episode number gets
+  // no ribbon at all.
   const badge = el('div', 'episode-badge');
   const ribbon = episodeRibbon(file);
   if (ribbon) {
@@ -785,24 +777,6 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     goPrev();
   });
 
-  // Badge lifetime: 5 s of picture. The countdown restarts on the first
-  // `playing` so a blocked autoplay does not burn it against a frozen frame,
-  // but the mount timer still guarantees it goes away on its own.
-  let badgeTimer = null;
-  const hideBadgeIn = (ms) => {
-    clearTimeout(badgeTimer);
-    badgeTimer = scheduleBadgeHide(badge, ms);
-  };
-  if (ribbon) {
-    hideBadgeIn(EPISODE_BADGE_MS);
-    video.addEventListener(
-      'playing',
-      () => {
-        if (!badge.classList.contains('is-gone')) hideBadgeIn(EPISODE_BADGE_MS);
-      },
-      { once: true }
-    );
-  }
   // Keep the chip clickable while the toolbar auto-hides (it is not inside the bar).
   nextOverlay.addEventListener('pointerdown', (e) => e.stopPropagation());
   nextOverlay.addEventListener('pointerup', (e) => e.stopPropagation());
@@ -1745,7 +1719,6 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     window.removeEventListener('orientationchange', onOrientation);
     window.removeEventListener('resize', onOrientation);
     clearTimeout(hideTimer);
-    clearTimeout(badgeTimer);
     savePosition(file.path, video.currentTime, video.duration);
     if (hls) {
       hls.destroy();
