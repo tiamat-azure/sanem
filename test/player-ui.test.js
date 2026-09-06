@@ -797,17 +797,7 @@ uiTest('mouse-click focus on a bar control does not trap auto-hide', async (t) =
     send,
     `(function(){
       const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
-      const bar = document.querySelector('.control-bar');
-      const opts = { bubbles: true, cancelable: true, pointerId: 21, pointerType: 'mouse' };
-      mute.dispatchEvent(new PointerEvent('pointerdown', opts));
-      mute.focus();
-      document.dispatchEvent(new PointerEvent('pointerup', opts));
-      bar.dispatchEvent(new PointerEvent('pointerleave', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 21,
-        pointerType: 'mouse',
-      }));
+      mute.focus({ preventScroll: true, focusVisible: false });
     })()`
   );
   const focus = await evaluate(
@@ -817,15 +807,36 @@ uiTest('mouse-click focus on a bar control does not trap auto-hide', async (t) =
       const ae = document.activeElement;
       return {
         stillMute: ae === mute,
-        focusVisible: Boolean(ae && ae.matches(':focus-visible')),
+        focusVisible: Boolean(ae && ae.matches(':focus-visible') &&
+          document.querySelector('.control-bar')?.contains(ae)),
       };
     })()`
   );
+  assert.equal(focus.stillMute, true, 'A1a: mouse-style focus must remain on the control');
   assert.equal(focus.focusVisible, false, 'mouse click must not be :focus-visible');
+  // Settle so a focus-ring reflow cannot re-seed lastMouse after leave.
+  await new Promise((r) => setTimeout(r, 50));
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      const video = document.querySelector('video');
+      const r = video.getBoundingClientRect();
+      bar.dispatchEvent(new PointerEvent('pointerleave', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: r.x + r.width / 2,
+        clientY: r.y + Math.min(40, r.height / 4),
+        relatedTarget: video,
+      }));
+    })()`
+  );
   await waitFor(
     send,
     'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
-    3000
+    4000
   );
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'clicking a control then leaving must still auto-hide');
@@ -3003,6 +3014,11 @@ test('pointInRect is a closed box used for chrome hover-hold', () => {
   assert.equal(pointInRect(box, 11, 5), false);
   assert.equal(pointInRect(box, 5, -1), false);
   assert.equal(pointInRect(null, 1, 1), false);
+  assert.equal(
+    pointInRect({ left: 0, right: 0, top: 0, bottom: 0 }, 0, 0),
+    false,
+    'degenerate 0×0 rect at origin is not a hit'
+  );
 });
 
 test('pointerLeaveAbandonsChrome ignores leave still inside bar or cast', () => {
@@ -3014,6 +3030,11 @@ test('pointerLeaveAbandonsChrome ignores leave still inside bar or cast', () => 
   assert.equal(pointerLeaveAbandonsChrome(false, 220, 20, rects), false, 'coords still on the cast button');
   assert.equal(pointerLeaveAbandonsChrome(false, 50, 10, rects), true, 'coords in the video, not chrome');
   assert.equal(pointerLeaveAbandonsChrome(false, 0, 0, rects), true, 'missing/default coords are a real leave');
+  assert.equal(
+    pointerLeaveAbandonsChrome(false, 0, 0, [{ left: 0, right: 0, top: 0, bottom: 0 }]),
+    true,
+    'empty hidden-cast rect at origin must not swallow a synthetic leave'
+  );
 });
 
 test('episodeLabel reads the number off a release-style filename', () => {

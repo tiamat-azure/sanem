@@ -54,6 +54,9 @@ export function notePointerPosition(prev, x, y, minPx = POINTER_MOVE_MIN_PX) {
 
 export function pointInRect(rect, x, y) {
   if (!rect || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+  // Hidden/empty chrome (e.g. the unused cast button) reports a 0×0 box at
+  // (0,0). That must not count as "pointer still in chrome".
+  if (!(rect.right > rect.left) || !(rect.bottom > rect.top)) return false;
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
@@ -1286,7 +1289,9 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     node.addEventListener('pointerleave', (e) => {
       if (e.pointerType === 'touch') return;
       const relatedOverChrome = overChrome(e.relatedTarget);
-      const rects = [bar.getBoundingClientRect(), btnCast.getBoundingClientRect()];
+      const rects = [bar, btnCast]
+        .filter((n) => !n.hidden)
+        .map((n) => n.getBoundingClientRect());
       if (!pointerLeaveAbandonsChrome(relatedOverChrome, e.clientX, e.clientY, rects)) {
         // Spurious leave, or hop bar <-> cast: keep lastMouse so
         // pointOverChrome still holds while the pointer is in chrome.
@@ -1307,7 +1312,12 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     });
     node.addEventListener('focusin', () => showBar());
     node.addEventListener('focusout', () => {
-      window.queueMicrotask(() => showBar());
+      window.queueMicrotask(() => {
+        // Auto-hide sets inert, which blurs a focused control. That focusout
+        // must not count as activity or the bar would show itself again (A1a).
+        if (!container.classList.contains('controls-visible')) return;
+        showBar();
+      });
     });
     node.addEventListener('keydown', () => showBar());
   };
