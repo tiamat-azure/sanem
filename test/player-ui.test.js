@@ -2710,6 +2710,57 @@ uiTest('volume range ArrowLeft/Right do not seek playback', async (t) => {
   assert.ok(before > 0.4, `ArrowLeft on volume must not seek -10s, currentTime=${before}`);
 });
 
+uiTest('Ctrl/Cmd/Alt/Shift+PageDown do not hop episodes', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await waitFor(send, 'Boolean(document.querySelector(".player-container video"))');
+  const before = await evaluate(send, 'location.hash');
+  assert.match(before, /e01/);
+  await evaluate(
+    send,
+    `(function(){
+      const extras = [
+        { ctrlKey: true },
+        { metaKey: true },
+        { altKey: true },
+        { shiftKey: true },
+      ];
+      for (const extra of extras) {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'PageDown',
+          bubbles: true,
+          cancelable: true,
+          ...extra,
+        }));
+      }
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  const hash = await evaluate(send, 'location.hash');
+  assert.equal(hash, before, 'modifier+PageDown must not steal browser tab-switch');
+});
+
+uiTest('Alt/Ctrl/Cmd+ArrowLeft do not seek playback', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  const t0 = await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = 1;
+      for (const extra of [{ altKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'ArrowLeft',
+          bubbles: true,
+          cancelable: true,
+          ...extra,
+        }));
+      }
+      return v.currentTime;
+    })()`
+  );
+  assert.ok(t0 > 0.4, `modified ArrowLeft must not seek -10s, currentTime=${t0}`);
+});
+
 uiTest('PageDown hops episodes even when the volume range is focused', async (t) => {
   const { send } = await openPlayer(t, { width: 1280, height: 800 }, { phone: false });
   await loopAndPlay(send);
@@ -3475,6 +3526,10 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
     playerKeyCommand({ key, target: body, ctrlKey: false, metaKey: false, altKey: false, ...extra });
   assert.equal(cmd('PageDown'), 'nextEpisode');
   assert.equal(cmd('PageUp'), 'prevEpisode');
+  assert.equal(cmd('PageDown', { ctrlKey: true }), null);
+  assert.equal(cmd('PageUp', { metaKey: true }), null);
+  assert.equal(cmd('PageDown', { altKey: true }), null);
+  assert.equal(cmd('PageUp', { shiftKey: true }), null);
   assert.equal(cmd('ArrowUp'), 'volumeUp');
   assert.equal(cmd('ArrowDown'), 'volumeDown');
   assert.equal(cmd('ArrowDown', { ctrlKey: true }), 'mute');
@@ -3487,6 +3542,10 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(cmd('ArrowUp', { altKey: true }), null);
   assert.equal(cmd('ArrowLeft'), 'seekBack');
   assert.equal(cmd('ArrowRight'), 'seekFwd');
+  assert.equal(cmd('ArrowLeft', { altKey: true }), null);
+  assert.equal(cmd('ArrowRight', { altKey: true }), null);
+  assert.equal(cmd('ArrowLeft', { metaKey: true }), null);
+  assert.equal(cmd('ArrowRight', { ctrlKey: true }), null);
   assert.equal(cmd(' '), 'togglePlay');
   assert.equal(
     cmd(' ', { target: { tagName: 'BUTTON', closest: (sel) => (sel === 'button' ? {} : null) } }),

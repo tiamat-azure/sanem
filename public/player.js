@@ -115,6 +115,9 @@ export function playerKeyCommand(e) {
   if (key === 'ArrowLeft' || key === 'ArrowRight') {
     // Focused volume range keeps native horizontal nudging (main behavior).
     if (isRangeInput(e.target)) return null;
+    // Alt+Left/Right is browser Back/Forward; Ctrl/Cmd+Left/Right is the
+    // same chord on macOS. Unmodified arrows still seek.
+    if (e.altKey || e.ctrlKey || e.metaKey) return null;
     return key === 'ArrowLeft' ? 'seekBack' : 'seekFwd';
   }
   if (key === 'ArrowUp' || key === 'ArrowDown') {
@@ -127,8 +130,11 @@ export function playerKeyCommand(e) {
   // P1a: PageUp/Down hop episodes even when the volume range is focused.
   // Do not add an isRangeInput guard here; onKey preventDefault is enough
   // to stop native range paging.
-  if (key === 'PageDown') return 'nextEpisode';
-  if (key === 'PageUp') return 'prevEpisode';
+  if (key === 'PageDown' || key === 'PageUp') {
+    // Ctrl/Cmd+Page switches browser tabs; Alt/Shift chords are not ours.
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
+    return key === 'PageDown' ? 'nextEpisode' : 'prevEpisode';
+  }
   if (key === 'f' || key === 'F') return 'toggleFull';
   if (key === 'Escape') return 'exitFull';
   return null;
@@ -987,6 +993,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   });
   progress.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
     e.stopPropagation();
     seekBy(e.key === 'ArrowLeft' ? -10 : 10);
