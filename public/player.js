@@ -43,8 +43,7 @@ export const VOLUME_STEP = 0.05;
 // Shortcut suffixes use spelled-out French key names (PRD §11.3 / T1).
 export const TIP_MUTE = 'Couper le son (raccourci : Contrôle + flèche en bas)';
 export const TIP_UNMUTE = 'Réactiver le son (raccourci : Contrôle + flèche haut)';
-export const TIP_VOLUME_UP = 'Augmenter le volume (raccourci : flèche haut)';
-export const TIP_VOLUME_DOWN = 'Diminuer le volume (raccourci : flèche en bas)';
+export const TIP_VOLUME = 'Volume (raccourci : flèche haut / flèche en bas)';
 export const TIP_PREV = 'Épisode précédent (raccourci : Page précédente)';
 export const TIP_NEXT = 'Épisode suivant (raccourci : Page suivante)';
 export const TIP_FS_ENTER = 'Plein écran (raccourci : F)';
@@ -416,13 +415,13 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   // Range is a replaced element: ::after cannot paint on <input>. Wrap it so
   // the Sanem .has-tip + aria-label tooltip still documents ArrowUp / ArrowDown.
   const volumeWrap = el('span', 'volume-wrap has-tip');
-  nameControl(volumeWrap, TIP_VOLUME_UP);
+  nameControl(volumeWrap, TIP_VOLUME);
   const volume = el('input', 'volume', {
     type: 'range',
     min: '0',
     max: '1',
     step: String(VOLUME_STEP),
-    'aria-label': TIP_VOLUME_DOWN,
+    'aria-label': 'Volume',
   });
   volumeWrap.appendChild(volume);
 

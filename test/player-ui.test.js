@@ -20,8 +20,7 @@ import {
   scheduleBadgeHide,
   TIP_MUTE,
   TIP_UNMUTE,
-  TIP_VOLUME_UP,
-  TIP_VOLUME_DOWN,
+  TIP_VOLUME,
   TIP_PREV,
   TIP_NEXT,
   TIP_FS_ENTER,
@@ -2466,8 +2465,16 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
   assert.equal(ui.volumeCtl.wrapHasTip, true);
   assert.equal(ui.volumeCtl.wrapTitle, null);
   assert.equal(ui.volumeCtl.inputTitle, null);
-  assert.equal(ui.volumeCtl.wrapLabel, TIP_VOLUME_UP);
-  assert.equal(ui.volumeCtl.inputLabel, TIP_VOLUME_DOWN);
+  assert.equal(ui.volumeCtl.wrapLabel, TIP_VOLUME);
+  assert.match(ui.volumeCtl.wrapLabel, /flèche haut/);
+  assert.match(ui.volumeCtl.wrapLabel, /flèche en bas/);
+  assert.equal(ui.volumeCtl.inputLabel, 'Volume');
+  const volTip = await evaluate(
+    send,
+    'getComputedStyle(document.querySelector(".volume-wrap"), "::after").content'
+  );
+  assert.match(volTip, /flèche haut/);
+  assert.match(volTip, /flèche en bas/);
 });
 
 uiTest('mute toggle and fullscreen labels document their shortcuts', async (t) => {
@@ -3257,6 +3264,7 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(VOLUME_STEP, 0.05);
   assert.equal(TIP_MUTE, 'Couper le son (raccourci : Contrôle + flèche en bas)');
   assert.equal(TIP_UNMUTE, 'Réactiver le son (raccourci : Contrôle + flèche haut)');
+  assert.equal(TIP_VOLUME, 'Volume (raccourci : flèche haut / flèche en bas)');
   const body = { tagName: 'BODY' };
   const cmd = (key, extra = {}) => playerKeyCommand({ key, target: body, ctrlKey: false, altKey: false, ...extra });
   assert.equal(cmd('PageDown'), 'nextEpisode');
