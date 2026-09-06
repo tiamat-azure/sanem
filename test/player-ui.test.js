@@ -586,6 +586,7 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'single tap must not pause until the double-tap window elapses');
   await waitForCenterTapDelay();
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, true, 'single surface tap still pauses after the double-tap delay');
   assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
@@ -600,6 +601,7 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
 
   await tapVideoCenter(send);
   await waitForCenterTapDelay();
+  await waitFor(send, CHROME_AND_RIBBON_UP);
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, false, 'single surface tap on paused video still resumes');
   assert.equal(ui.centerPlay, false, 'center play icon hides once playing');
