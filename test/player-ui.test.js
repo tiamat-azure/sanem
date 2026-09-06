@@ -401,6 +401,7 @@ const SNAPSHOT = `({
     if (!wrap && !input) return null;
     return {
       wrapLabel: wrap?.getAttribute('aria-label') ?? null,
+      wrapTip: wrap?.getAttribute('data-tip') ?? null,
       wrapHasTip: wrap?.classList.contains('has-tip') ?? false,
       wrapTitle: wrap?.getAttribute('title') ?? null,
       inputLabel: input?.getAttribute('aria-label') ?? null,
@@ -2466,9 +2467,10 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
   assert.equal(ui.volumeCtl.wrapHasTip, true);
   assert.equal(ui.volumeCtl.wrapTitle, null);
   assert.equal(ui.volumeCtl.inputTitle, null);
-  assert.equal(ui.volumeCtl.wrapLabel, TIP_VOLUME);
-  assert.match(ui.volumeCtl.wrapLabel, /flèche haut/);
-  assert.match(ui.volumeCtl.wrapLabel, /flèche en bas/);
+  assert.equal(ui.volumeCtl.wrapLabel, null, 'wrap is not a control: no aria-label');
+  assert.equal(ui.volumeCtl.wrapTip, TIP_VOLUME);
+  assert.match(ui.volumeCtl.wrapTip, /flèche haut/);
+  assert.match(ui.volumeCtl.wrapTip, /flèche en bas/);
   assert.equal(ui.volumeCtl.inputLabel, 'Volume');
   const volTip = await evaluate(
     send,

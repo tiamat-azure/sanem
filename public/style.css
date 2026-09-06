@@ -1188,6 +1188,12 @@ button.center-play:focus-visible {
   transition: opacity 0.12s ease;
 }
 
+/* Non-control hosts (volume wrap) paint from data-tip so aria-label stays
+   on the real control. */
+.has-tip[data-tip]::after {
+  content: attr(data-tip);
+}
+
 @media (hover: hover) and (pointer: fine) {
   .has-tip:hover::after,
   .has-tip:focus-visible::after,

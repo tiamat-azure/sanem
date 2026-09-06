@@ -39,7 +39,8 @@ export const CENTER_DBLCLICK_MS = 300;
 // Same step as the volume <input type="range">.
 export const VOLUME_STEP = 0.05;
 
-// CSS .has-tip paints from aria-label. Native title= would double the tip.
+// CSS .has-tip paints from aria-label on real controls. Native title=
+// would double the tip. Non-control hosts (volume wrap) use data-tip.
 // Shortcut suffixes use spelled-out French key names (PRD §11.3 / T1).
 export const TIP_MUTE = 'Couper le son (raccourci : Contrôle + flèche en bas)';
 export const TIP_UNMUTE = 'Réactiver le son (raccourci : Contrôle + flèche haut)';
@@ -434,9 +435,10 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   btnMute.appendChild(icon('i-volume'));
   nameControl(btnMute, TIP_MUTE);
   // Range is a replaced element: ::after cannot paint on <input>. Wrap it so
-  // the Sanem .has-tip + aria-label tooltip still documents ArrowUp / ArrowDown.
+  // the Sanem .has-tip tooltip still documents ArrowUp / ArrowDown. The wrap
+  // is not a control: paint from data-tip, keep aria-label on the range.
   const volumeWrap = el('span', 'volume-wrap has-tip');
-  nameControl(volumeWrap, TIP_VOLUME);
+  volumeWrap.setAttribute('data-tip', TIP_VOLUME);
   const volume = el('input', 'volume', {
     type: 'range',
     min: '0',
