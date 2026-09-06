@@ -14,6 +14,7 @@ import {
   POINTER_MOVE_MIN_PX,
   notePointerPosition,
   pointInRect,
+  pointerLeaveAbandonsChrome,
   episodeLabel,
   seriesSiblings,
   scheduleBadgeHide,
@@ -809,11 +810,18 @@ uiTest('mouse-click focus on a bar control does not trap auto-hide', async (t) =
       }));
     })()`
   );
-  const focused = await evaluate(
+  const focus = await evaluate(
     send,
-    'document.querySelector(".control-bar")?.contains(document.activeElement)'
+    `(function(){
+      const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const ae = document.activeElement;
+      return {
+        stillMute: ae === mute,
+        focusVisible: Boolean(ae && ae.matches(':focus-visible')),
+      };
+    })()`
   );
-  assert.equal(focused, false, 'mouse click must not leave :focus-visible-less focus on the bar');
+  assert.equal(focus.focusVisible, false, 'mouse click must not be :focus-visible');
   await waitFor(
     send,
     'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
@@ -823,6 +831,41 @@ uiTest('mouse-click focus on a bar control does not trap auto-hide', async (t) =
   assert.equal(ui.controlsVisible, false, 'clicking a control then leaving must still auto-hide');
   assert.equal(ui.cursor.container, 'none');
   assert.equal(ui.paused, false);
+});
+
+uiTest('mouse pointerup does not blur a focused progress or volume control', async (t) => {
+  const { send } = await openPlayer(t, { width: 1100, height: 700 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  const after = await evaluate(
+    send,
+    `(function(){
+      const report = [];
+      for (const sel of ['.progress', '.volume']) {
+        const el = document.querySelector(sel);
+        if (!el || getComputedStyle(el).display === 'none') {
+          report.push({ sel, skipped: true });
+          continue;
+        }
+        const opts = { bubbles: true, cancelable: true, pointerId: 31, pointerType: 'mouse' };
+        el.dispatchEvent(new PointerEvent('pointerdown', opts));
+        el.focus();
+        document.dispatchEvent(new PointerEvent('pointerup', opts));
+        report.push({
+          sel,
+          skipped: false,
+          stillFocused: document.activeElement === el,
+          focusVisible: el.matches(':focus-visible'),
+        });
+      }
+      return report;
+    })()`
+  );
+  const checked = after.filter((r) => !r.skipped);
+  assert.ok(checked.length >= 1, 'progress and/or volume must be present');
+  for (const row of checked) {
+    assert.equal(row.stillFocused, true, `${row.sel} must keep focus after mouse pointerup`);
+  }
 });
 
 uiTest('hovering the control bar holds it visible and clicks hit controls', async (t) => {
@@ -904,6 +947,88 @@ uiTest('leaving the control bar resumes auto-hide', async (t) => {
   );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'pointerleave must restart the 2s auto-hide');
+  assert.equal(ui.paused, false);
+});
+
+uiTest('spurious pointerleave inside the bar does not drop geometric hover hold', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  const box = await waitFor(
+    send,
+    `(function(){
+      const el = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return null;
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`
+  );
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const x = ${Number(box.x)};
+      const y = ${Number(box.y)};
+      const move = (from) => new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: from ? x - 4 : x,
+        clientY: y,
+      });
+      bar.dispatchEvent(new PointerEvent('pointerenter', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: x,
+        clientY: y,
+      }));
+      bar.dispatchEvent(move(true));
+      bar.dispatchEvent(move(false));
+      // Gecko-style leave with relatedTarget still a bar child and coords
+      // still on the control: must not abandon lastMouse.
+      bar.dispatchEvent(new PointerEvent('pointerleave', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: x,
+        clientY: y,
+        relatedTarget: mute,
+      }));
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 2500));
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'leave still inside bar/cast geometry must not drop chrome');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      const video = document.querySelector('video');
+      const br = bar.getBoundingClientRect();
+      bar.dispatchEvent(new PointerEvent('pointerleave', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: br.x + br.width / 2,
+        clientY: br.y - 40,
+        relatedTarget: video,
+      }));
+    })()`
+  );
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'leave outside chrome geometry must resume auto-hide');
   assert.equal(ui.paused, false);
 });
 
@@ -1103,12 +1228,17 @@ uiTest('keyboard focus on the control bar holds it visible', async (t) => {
     })()`
   );
   assert.equal(muteShown, true, 'mute button must be visible so it can take focus');
-  await evaluate(send, `document.querySelector('${MUTE_SELECTOR}').focus()`);
+  await evaluate(send, `document.querySelector('${MUTE_SELECTOR}').focus({ focusVisible: true })`);
   const focused = await evaluate(
     send,
     `document.activeElement === document.querySelector('${MUTE_SELECTOR}')`
   );
   assert.equal(focused, true);
+  const focusVisible = await evaluate(
+    send,
+    `document.querySelector('${MUTE_SELECTOR}')?.matches(':focus-visible')`
+  );
+  assert.equal(focusVisible, true, 'keyboard-style focus must match :focus-visible to hold chrome');
   await new Promise((r) => setTimeout(r, 2500));
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true, 'focused bar control must not time-hide the bar');
@@ -1133,7 +1263,7 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
     `(function(){
       const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
       if (!btn) throw new Error('missing fullscreen button');
-      btn.focus();
+      btn.focus({ focusVisible: true });
     })()`
   );
   let focused = await evaluate(
@@ -2873,6 +3003,17 @@ test('pointInRect is a closed box used for chrome hover-hold', () => {
   assert.equal(pointInRect(box, 11, 5), false);
   assert.equal(pointInRect(box, 5, -1), false);
   assert.equal(pointInRect(null, 1, 1), false);
+});
+
+test('pointerLeaveAbandonsChrome ignores leave still inside bar or cast', () => {
+  const bar = { left: 0, right: 100, top: 80, bottom: 120 };
+  const cast = { left: 200, right: 240, top: 8, bottom: 48 };
+  const rects = [bar, cast];
+  assert.equal(pointerLeaveAbandonsChrome(true, 10, 10, rects), false, 'relatedTarget in chrome keeps hold');
+  assert.equal(pointerLeaveAbandonsChrome(false, 50, 100, rects), false, 'coords still in the bar');
+  assert.equal(pointerLeaveAbandonsChrome(false, 220, 20, rects), false, 'coords still on the cast button');
+  assert.equal(pointerLeaveAbandonsChrome(false, 50, 10, rects), true, 'coords in the video, not chrome');
+  assert.equal(pointerLeaveAbandonsChrome(false, 0, 0, rects), true, 'missing/default coords are a real leave');
 });
 
 test('episodeLabel reads the number off a release-style filename', () => {

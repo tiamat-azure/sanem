@@ -57,6 +57,19 @@ export function pointInRect(rect, x, y) {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+// pointerleave can fire while the pointer is still in bar/cast (Gecko
+// fullscreen / child hops / null relatedTarget). Only drop the last mouse
+// pixel when the leave is actually outside chrome geometry.
+export function pointerLeaveAbandonsChrome(relatedOverChrome, x, y, rects = []) {
+  if (relatedOverChrome) return false;
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    for (const r of rects) {
+      if (pointInRect(r, x, y)) return false;
+    }
+  }
+  return true;
+}
+
 // Hash teardown recreates the player. Carry FS intent across that remount
 // so next/prev (and ended auto-chain) stay in fullscreen. Overlay is
 // restored immediately; native is re-requested on the new container.
@@ -472,7 +485,12 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   };
   const focusHoldsChrome = () => {
     const ae = document.activeElement;
-    return Boolean(ae && (bar.contains(ae) || btnCast.contains(ae)));
+    if (!ae || !(bar.contains(ae) || btnCast.contains(ae))) return false;
+    // Mouse/pen click focus is not :focus-visible in Gecko/Blink, so it
+    // must not trap auto-hide. Keyboard Tab (and focus({focusVisible:true}))
+    // still holds chrome. Do not blur on pointerup: a scrub/volume click
+    // must leave the control focused for further keyboard use.
+    return ae.matches(':focus-visible');
   };
   // Mouse/pen hover or an active pointer on overlay chrome holds
   // controls-visible so the 2s timer cannot hide it under the cursor/finger.
@@ -494,8 +512,8 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     hideTimer = null;
     bar.inert = true;
     btnCast.inert = true;
-    // inert drops focus and tab order. Do not blur here: chromeHoldsVisible
-    // already keeps the bar up while it contains document.activeElement.
+    // inert drops focus and tab order. Do not blur here: :focus-visible
+    // already keeps the bar up while a keyboard-focused control is in it.
   };
   const showBar = () => {
     bar.inert = false;
@@ -1267,9 +1285,23 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     });
     node.addEventListener('pointerleave', (e) => {
       if (e.pointerType === 'touch') return;
+      const relatedOverChrome = overChrome(e.relatedTarget);
+      const rects = [bar.getBoundingClientRect(), btnCast.getBoundingClientRect()];
+      if (!pointerLeaveAbandonsChrome(relatedOverChrome, e.clientX, e.clientY, rects)) {
+        // Spurious leave, or hop bar <-> cast: keep lastMouse so
+        // pointOverChrome still holds while the pointer is in chrome.
+        if (relatedOverChrome) pointerInChrome = true;
+        if (
+          Number.isFinite(e.clientX) &&
+          Number.isFinite(e.clientY) &&
+          rects.some((r) => pointInRect(r, e.clientX, e.clientY))
+        ) {
+          lastMouse = { x: e.clientX, y: e.clientY };
+        }
+        showBar();
+        return;
+      }
       pointerInChrome = false;
-      // Last pixel was on this chrome node; do not keep a geometric hold
-      // after Gecko/Blink have told us the pointer left.
       lastMouse = null;
       showBar();
     });
@@ -1281,20 +1313,9 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   };
   bindChromeHold(bar);
   bindChromeHold(btnCast);
-  const blurMouseFocusOnChrome = (e) => {
-    if (e.pointerType === 'touch') return;
-    const ae = document.activeElement;
-    if (!ae || typeof ae.blur !== 'function') return;
-    if (!(bar.contains(ae) || btnCast.contains(ae))) return;
-    // Mouse-click focus on a control would deadlock auto-hide: focus holds
-    // chrome, hide never runs, inert never drops focus. Keyboard Tab does
-    // not fire this pointerup path, so :focus-visible hold still works.
-    ae.blur();
-  };
   const onChromePointerEnd = (e) => {
     if (!chromeActivePointers.has(e.pointerId)) return;
     chromeActivePointers.delete(e.pointerId);
-    blurMouseFocusOnChrome(e);
     showBar();
   };
   const stopHoldSeeks = [];
