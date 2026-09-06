@@ -627,7 +627,7 @@ async function fakeDurationAndTime(send, duration, currentTime) {
 }
 
 async function clickFullscreen(send) {
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   // Wait until native was attempted and either overlay fallback or native FS
   // landed. Do not require is-fullscreen during the wait (captain decision B).
   await waitFor(

@@ -36,6 +36,118 @@ export const NEXT_UP_LEAD_S = 120;
 export const EPISODE_BADGE_MS = 5000;
 // Distinguish center single-tap pause from double-tap fullscreen.
 export const CENTER_DBLCLICK_MS = 300;
+// Same step as the volume <input type="range">.
+export const VOLUME_STEP = 0.05;
+
+// CSS .has-tip paints from aria-label on real controls. Native title=
+// would double the tip. Non-control hosts (volume wrap) use data-tip.
+// Shortcut suffixes use spelled-out French key names (PRD §11.3 / T1).
+export const TIP_MUTE = 'Couper le son (raccourci : Contrôle ou Cmd + flèche en bas)';
+export const TIP_UNMUTE = 'Réactiver le son (raccourci : Contrôle ou Cmd + flèche haut)';
+export const TIP_VOLUME = 'Volume (raccourci : flèche haut / flèche en bas)';
+export const TIP_PREV = 'Épisode précédent (raccourci : Page précédente)';
+export const TIP_NEXT = 'Épisode suivant (raccourci : Page suivante)';
+export const TIP_FS_ENTER = 'Plein écran (raccourci : F)';
+export const TIP_FS_EXIT = 'Quitter le plein écran (raccourci : F)';
+
+const NON_TEXT_INPUT_TYPES = new Set([
+  'range',
+  'button',
+  'checkbox',
+  'radio',
+  'submit',
+  'reset',
+  'file',
+  'hidden',
+  'color',
+  'image',
+]);
+
+// Player shortcuts must not steal keys from text fields (login, future search).
+export function isPlayerTypingTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag !== 'INPUT') return false;
+  const type = String(target.type || 'text').toLowerCase();
+  return !NON_TEXT_INPUT_TYPES.has(type);
+}
+
+function isButtonTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.tagName === 'BUTTON') return true;
+  return typeof target.closest === 'function' && Boolean(target.closest('button'));
+}
+
+function isRangeInput(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.tagName !== 'INPUT') return false;
+  return String(target.type || '').toLowerCase() === 'range';
+}
+
+// Unmute after ArrowDown/`bumpVolume` hit 0 must restore sound: clearing
+// `muted` alone leaves volume at 0. Prefer the last non-zero level.
+export function volumeAfterUnmute(volume, lastAudible, fallback = VOLUME_STEP) {
+  const current = Number(volume);
+  if (Number.isFinite(current) && current > 0) return Math.min(1, current);
+  const last = Number(lastAudible);
+  if (Number.isFinite(last) && last > 0) return Math.min(1, last);
+  return fallback;
+}
+
+// Never persist 0: unmute-after-remount needs the last audible level.
+export function volumeToPersist(volume, lastAudible) {
+  const current = Number(volume);
+  if (Number.isFinite(current) && current > 0) return Math.min(1, current);
+  const last = Number(lastAudible);
+  if (Number.isFinite(last) && last > 0) return Math.min(1, last);
+  return null;
+}
+
+// Pure mapping so key handling can be unit-tested without Chrome.
+// Returns a command name, or null when the event is not a player shortcut.
+export function playerKeyCommand(e) {
+  if (!e || isPlayerTypingTarget(e.target)) return null;
+  const key = e.key;
+  if (key === ' ' && isButtonTarget(e.target)) return null;
+  if (key === ' ') {
+    // S1a: Ctrl/Cmd+Space is IME; Alt+Space is the window menu. Bare Space
+    // still toggles play; key-repeat is ignored in onKey.
+    if (e.ctrlKey || e.metaKey || e.altKey) return null;
+    return 'togglePlay';
+  }
+  if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    // Focused volume range keeps native horizontal nudging (main behavior).
+    if (isRangeInput(e.target)) return null;
+    // Alt+Left/Right is browser Back/Forward; Ctrl/Cmd+Left/Right is the
+    // same chord on macOS. Unmodified arrows still seek.
+    if (e.altKey || e.ctrlKey || e.metaKey) return null;
+    return key === 'ArrowLeft' ? 'seekBack' : 'seekFwd';
+  }
+  if (key === 'ArrowUp' || key === 'ArrowDown') {
+    if (e.altKey) return null;
+    // M1c: Ctrl (Ubuntu) and Cmd/meta (macOS) both chord mute/unmute.
+    // B1a: bare ArrowUp/Down stay volume nudges and may unmute.
+    if (e.ctrlKey || e.metaKey) return key === 'ArrowUp' ? 'unmute' : 'mute';
+    return key === 'ArrowUp' ? 'volumeUp' : 'volumeDown';
+  }
+  // P1a: PageUp/Down hop episodes even when the volume range is focused.
+  // Do not add an isRangeInput guard here; onKey preventDefault is enough
+  // to stop native range paging.
+  if (key === 'PageDown' || key === 'PageUp') {
+    // Ctrl/Cmd+Page switches browser tabs; Alt/Shift chords are not ours.
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
+    return key === 'PageDown' ? 'nextEpisode' : 'prevEpisode';
+  }
+  if (key === 'f' || key === 'F') {
+    // Ctrl/Cmd+F is Find; Alt+F is not a Sanem chord.
+    if (e.ctrlKey || e.metaKey || e.altKey) return null;
+    return 'toggleFull';
+  }
+  if (key === 'Escape') return 'exitFull';
+  return null;
+}
 
 // Gecko (Firefox on Ubuntu especially) fires pointermove on <video> with
 // unchanged clientX/Y while frames paint, and again when `cursor: none`
@@ -336,23 +448,36 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   const time = el('span', 'time-display');
   time.textContent = '0:00 / 0:00';
 
-  const btnMute = el('button', 'ctl', { type: 'button', 'aria-label': 'Couper le son' });
+  const btnMute = el('button', 'ctl ctl-mute has-tip', { type: 'button' });
   btnMute.appendChild(icon('i-volume'));
-  const volume = el('input', 'volume', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Volume' });
+  nameControl(btnMute, TIP_MUTE);
+  // Range is a replaced element: ::after cannot paint on <input>. Wrap it so
+  // the Sanem .has-tip tooltip still documents ArrowUp / ArrowDown. The wrap
+  // is not a control: paint from data-tip, keep aria-label on the range.
+  const volumeWrap = el('span', 'volume-wrap has-tip');
+  volumeWrap.setAttribute('data-tip', TIP_VOLUME);
+  const volume = el('input', 'volume', {
+    type: 'range',
+    min: '0',
+    max: '1',
+    step: String(VOLUME_STEP),
+    'aria-label': 'Volume',
+  });
+  volumeWrap.appendChild(volume);
 
   const btnPrev = el('button', 'ctl ctl-prev has-tip', { type: 'button' });
   btnPrev.appendChild(icon('i-prev'));
-  nameControl(btnPrev, 'Épisode précédent');
+  nameControl(btnPrev, TIP_PREV);
   btnPrev.hidden = !prev;
 
   const btnNext = el('button', 'ctl ctl-next has-tip', { type: 'button' });
   btnNext.appendChild(icon('i-next'));
-  nameControl(btnNext, 'Épisode suivant');
+  nameControl(btnNext, TIP_NEXT);
   btnNext.hidden = !next;
 
   const btnFull = el('button', 'ctl ctl-fs has-tip', { type: 'button' });
   btnFull.appendChild(icon('i-fullscreen'));
-  nameControl(btnFull, 'Plein écran');
+  nameControl(btnFull, TIP_FS_ENTER);
 
   const btnCast = el('button', 'ctl cast-btn', {
     type: 'button',
@@ -364,12 +489,12 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   btnCast.appendChild(castIcon());
 
   // Play/pause is the named Netflix-style center button, not a toolbar control.
-  bar.append(progress, time, btnMute, volume, btnPrev, btnNext, btnFull);
+  bar.append(progress, time, btnMute, volumeWrap, btnPrev, btnNext, btnFull);
 
   const nextOverlay = el('div', 'next-overlay', { hidden: '' });
   const prevBtnOverlay = el('button', 'prev-up-btn has-tip', { type: 'button' });
   prevBtnOverlay.appendChild(icon('i-prev'));
-  nameControl(prevBtnOverlay, 'Épisode précédent');
+  nameControl(prevBtnOverlay, TIP_PREV);
   prevBtnOverlay.hidden = !prev;
   const nextBtnOverlay = el('button', 'next-up-btn has-tip', { type: 'button' });
   const nextUpLabel = el('span', 'next-up-label');
@@ -408,9 +533,10 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
 
   // --- restore volume / position ---
   const savedVol = Number(localStorage.getItem(VOLUME_KEY));
-  video.volume = Number.isFinite(savedVol) ? Math.min(1, Math.max(0, savedVol)) : 1;
+  video.volume = Number.isFinite(savedVol) && savedVol > 0 ? Math.min(1, savedVol) : 1;
   video.muted = localStorage.getItem(MUTED_KEY) === '1';
   volume.value = String(video.muted ? 0 : video.volume);
+  let lastAudible = video.volume > 0 ? video.volume : 0;
 
   const resumeAt = loadPosition(file.path);
   let resumeApplied = false;
@@ -457,7 +583,10 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
       progBuffer.style.width = d ? `${(bEnd / d) * 100}%` : '0%';
     }
     time.textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
-    setIcon(btnMute, video.muted || video.volume === 0 ? 'i-mute' : 'i-volume');
+    const silenced = video.muted || video.volume === 0;
+    setIcon(btnMute, silenced ? 'i-mute' : 'i-volume');
+    nameControl(btnMute, silenced ? TIP_UNMUTE : TIP_MUTE);
+    volume.value = String(silenced ? 0 : video.volume);
     const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
     centerPlay.hidden = !video.paused || atEnd || holdSeeking;
     centerPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
@@ -618,7 +747,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   if (next) {
     nextBtnOverlay.replaceChildren(icon('i-next'));
     nextBtnOverlay.classList.add('has-tip');
-    nameControl(nextBtnOverlay, 'Épisode suivant');
+    nameControl(nextBtnOverlay, TIP_NEXT);
   } else {
     nextBtnOverlay.replaceChildren(nextUpLabel);
     nextBtnOverlay.classList.remove('has-tip');
@@ -654,15 +783,35 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   nextOverlay.addEventListener('pointerdown', (e) => e.stopPropagation());
   nextOverlay.addEventListener('pointerup', (e) => e.stopPropagation());
 
+  const persistAudio = () => {
+    if (video.volume > 0) lastAudible = video.volume;
+    const stored = volumeToPersist(video.volume, lastAudible);
+    if (stored != null) localStorage.setItem(VOLUME_KEY, String(stored));
+    localStorage.setItem(MUTED_KEY, video.muted || video.volume === 0 ? '1' : '0');
+    volume.value = String(video.muted || video.volume === 0 ? 0 : video.volume);
+  };
+  const bumpVolume = (delta) => {
+    const next = Math.min(1, Math.max(0, Math.round((video.volume + delta) * 20) / 20));
+    video.volume = next;
+    video.muted = next === 0;
+    persistAudio();
+  };
+  const setMuted = (muted) => {
+    if (!muted) {
+      // V1a: unmute after volume hit 0 must restore a non-zero level.
+      video.volume = volumeAfterUnmute(video.volume, lastAudible);
+    }
+    video.muted = Boolean(muted);
+    persistAudio();
+  };
+  const isSilenced = () => video.muted || video.volume === 0;
   btnMute.addEventListener('click', () => {
-    video.muted = !video.muted;
-    localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
+    setMuted(!isSilenced());
   });
   volume.addEventListener('input', () => {
     video.volume = Number(volume.value);
     video.muted = video.volume === 0;
-    localStorage.setItem(VOLUME_KEY, volume.value);
-    localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
+    persistAudio();
   });
   // --- remote playback (W3C RemotePlayback on HTMLVideoElement.remote) ---
   // Chromecast / AirPlay-class devices via the UA picker. No Cast SDK, no
@@ -853,6 +1002,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   });
   progress.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
     e.stopPropagation();
     seekBy(e.key === 'ArrowLeft' ? -10 : 10);
@@ -893,7 +1043,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   };
 
   const setFsControl = (exiting) => {
-    nameControl(btnFull, exiting ? 'Quitter le plein écran' : 'Plein écran');
+    nameControl(btnFull, exiting ? TIP_FS_EXIT : TIP_FS_ENTER);
     setIcon(btnFull, exiting ? 'i-exit-fullscreen' : 'i-fullscreen');
   };
 
@@ -1492,28 +1642,62 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
 
   // --- keyboard ---
   const onKey = (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    switch (e.key) {
-      case ' ':
-        // Native buttons already activate on Space; don't toggle twice.
-        if (e.target.closest('button')) return;
-        e.preventDefault();
-        togglePlay();
+    const cmd = playerKeyCommand(e);
+    if (!cmd) return;
+    if (
+      cmd === 'togglePlay' ||
+      cmd === 'seekBack' ||
+      cmd === 'seekFwd' ||
+      cmd === 'volumeUp' ||
+      cmd === 'volumeDown' ||
+      cmd === 'mute' ||
+      cmd === 'unmute' ||
+      cmd === 'nextEpisode' ||
+      cmd === 'prevEpisode'
+    ) {
+      e.preventDefault();
+    }
+    switch (cmd) {
+      case 'togglePlay':
+        if (!e.repeat) togglePlay();
         showBar();
         break;
-      case 'ArrowLeft':
+      case 'seekBack':
         seekBy(-10);
         showBar();
         break;
-      case 'ArrowRight':
+      case 'seekFwd':
         seekBy(10);
         showBar();
         break;
-      case 'f':
-      case 'F':
-        toggleFull();
+      case 'volumeUp':
+        bumpVolume(VOLUME_STEP);
+        showBar();
         break;
-      case 'Escape':
+      case 'volumeDown':
+        bumpVolume(-VOLUME_STEP);
+        showBar();
+        break;
+      case 'mute':
+        setMuted(true);
+        showBar();
+        break;
+      case 'unmute':
+        if (isSilenced()) setMuted(false);
+        showBar();
+        break;
+      case 'nextEpisode':
+        // Same path as next chrome, but no-op when there is no sibling
+        // (goNext() with null would leave the series via "Revenir à la série").
+        if (!e.repeat && next) goNext();
+        break;
+      case 'prevEpisode':
+        if (!e.repeat) goPrev();
+        break;
+      case 'toggleFull':
+        if (!e.repeat) toggleFull();
+        break;
+      case 'exitFull':
         if (wantFull || container.classList.contains('is-fullscreen')) exitFull();
         break;
       default:
