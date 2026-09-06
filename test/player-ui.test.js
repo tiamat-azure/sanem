@@ -2509,6 +2509,20 @@ uiTest('mute toggle and fullscreen labels document their shortcuts', async (t) =
   );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.muteCtl.label, TIP_MUTE);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', metaKey: true, bubbles: true, cancelable: true }))`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_UNMUTE);
+  const mutedByCmd = await evaluate(send, 'Boolean(document.querySelector("video")?.muted)');
+  assert.equal(mutedByCmd, true, 'Cmd+ArrowDown must mute (M1c)');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', metaKey: true, bubbles: true, cancelable: true }))`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_MUTE);
   await installFullscreenStub(send, 'succeed');
   await clickFullscreen(send);
   ui = await evaluate(send, SNAPSHOT);
@@ -3453,17 +3467,21 @@ test('volumeToPersist never stores zero', () => {
 
 test('playerKeyCommand maps watching shortcuts and ignores typing targets', () => {
   assert.equal(VOLUME_STEP, 0.05);
-  assert.equal(TIP_MUTE, 'Couper le son (raccourci : Contrôle + flèche en bas)');
-  assert.equal(TIP_UNMUTE, 'Réactiver le son (raccourci : Contrôle + flèche haut)');
+  assert.equal(TIP_MUTE, 'Couper le son (raccourci : Contrôle ou Cmd + flèche en bas)');
+  assert.equal(TIP_UNMUTE, 'Réactiver le son (raccourci : Contrôle ou Cmd + flèche haut)');
   assert.equal(TIP_VOLUME, 'Volume (raccourci : flèche haut / flèche en bas)');
   const body = { tagName: 'BODY' };
-  const cmd = (key, extra = {}) => playerKeyCommand({ key, target: body, ctrlKey: false, altKey: false, ...extra });
+  const cmd = (key, extra = {}) =>
+    playerKeyCommand({ key, target: body, ctrlKey: false, metaKey: false, altKey: false, ...extra });
   assert.equal(cmd('PageDown'), 'nextEpisode');
   assert.equal(cmd('PageUp'), 'prevEpisode');
   assert.equal(cmd('ArrowUp'), 'volumeUp');
   assert.equal(cmd('ArrowDown'), 'volumeDown');
   assert.equal(cmd('ArrowDown', { ctrlKey: true }), 'mute');
   assert.equal(cmd('ArrowUp', { ctrlKey: true }), 'unmute');
+  assert.equal(cmd('ArrowDown', { metaKey: true }), 'mute');
+  assert.equal(cmd('ArrowUp', { metaKey: true }), 'unmute');
+  assert.equal(cmd('ArrowDown', { ctrlKey: true, metaKey: true }), 'mute');
   assert.equal(cmd('f'), 'toggleFull');
   assert.equal(cmd('F'), 'toggleFull');
   assert.equal(cmd('ArrowUp', { altKey: true }), null);
@@ -3483,6 +3501,10 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(playerKeyCommand({ key: 'ArrowUp', target: range, ctrlKey: false, altKey: false }), 'volumeUp');
   assert.equal(playerKeyCommand({ key: 'ArrowDown', target: range, ctrlKey: false, altKey: false }), 'volumeDown');
   assert.equal(playerKeyCommand({ key: 'ArrowDown', target: range, ctrlKey: true, altKey: false }), 'mute');
+  assert.equal(
+    playerKeyCommand({ key: 'ArrowUp', target: range, ctrlKey: false, metaKey: true, altKey: false }),
+    'unmute'
+  );
   assert.equal(playerKeyCommand({ key: 'PageDown', target: range }), 'nextEpisode');
   assert.equal(playerKeyCommand({ key: 'PageUp', target: range }), 'prevEpisode');
   assert.equal(

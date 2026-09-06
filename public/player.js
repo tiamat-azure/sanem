@@ -42,8 +42,8 @@ export const VOLUME_STEP = 0.05;
 // CSS .has-tip paints from aria-label on real controls. Native title=
 // would double the tip. Non-control hosts (volume wrap) use data-tip.
 // Shortcut suffixes use spelled-out French key names (PRD §11.3 / T1).
-export const TIP_MUTE = 'Couper le son (raccourci : Contrôle + flèche en bas)';
-export const TIP_UNMUTE = 'Réactiver le son (raccourci : Contrôle + flèche haut)';
+export const TIP_MUTE = 'Couper le son (raccourci : Contrôle ou Cmd + flèche en bas)';
+export const TIP_UNMUTE = 'Réactiver le son (raccourci : Contrôle ou Cmd + flèche haut)';
 export const TIP_VOLUME = 'Volume (raccourci : flèche haut / flèche en bas)';
 export const TIP_PREV = 'Épisode précédent (raccourci : Page précédente)';
 export const TIP_NEXT = 'Épisode suivant (raccourci : Page suivante)';
@@ -119,7 +119,9 @@ export function playerKeyCommand(e) {
   }
   if (key === 'ArrowUp' || key === 'ArrowDown') {
     if (e.altKey) return null;
-    if (e.ctrlKey) return key === 'ArrowUp' ? 'unmute' : 'mute';
+    // M1c: Ctrl (Ubuntu) and Cmd/meta (macOS) both chord mute/unmute.
+    // B1a: bare ArrowUp/Down stay volume nudges and may unmute.
+    if (e.ctrlKey || e.metaKey) return key === 'ArrowUp' ? 'unmute' : 'mute';
     return key === 'ArrowUp' ? 'volumeUp' : 'volumeDown';
   }
   // P1a: PageUp/Down hop episodes even when the volume range is focused.
