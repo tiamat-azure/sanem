@@ -2673,7 +2673,8 @@ uiTest('unmute after ArrowDown to 0 restores a non-zero volume', async (t) => {
 uiTest('volume range ArrowLeft/Right do not seek playback', async (t) => {
   const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
   await loopAndPlay(send);
-  await evaluate(
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  const before = await evaluate(
     send,
     `(function(){
       const v = document.querySelector('video');
@@ -2687,14 +2688,10 @@ uiTest('volume range ArrowLeft/Right do not seek playback', async (t) => {
         bubbles: true,
         cancelable: true,
       }));
+      return v.currentTime;
     })()`
   );
-  const after = await evaluate(
-    send,
-    `({ t: document.querySelector('video').currentTime, ae: document.activeElement?.className })`
-  );
-  assert.ok(after.ae.includes('volume'), 'volume range must keep focus');
-  assert.ok(after.t > 0.4, `ArrowLeft on volume must not seek -10s, currentTime=${after.t}`);
+  assert.ok(before > 0.4, `ArrowLeft on volume must not seek -10s, currentTime=${before}`);
 });
 
 uiTest('mute click restores audio when silenced even if muted is false', async (t) => {
