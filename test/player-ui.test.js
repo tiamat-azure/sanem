@@ -2761,6 +2761,51 @@ uiTest('Alt/Ctrl/Cmd+ArrowLeft do not seek playback', async (t) => {
   assert.ok(t0 > 0.4, `modified ArrowLeft must not seek -10s, currentTime=${t0}`);
 });
 
+uiTest('Ctrl/Cmd/Alt+F do not toggle fullscreen', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await installFullscreenStub(send, 'succeed');
+  await evaluate(
+    send,
+    `(function(){
+      for (const extra of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'f',
+          bubbles: true,
+          cancelable: true,
+          ...extra,
+        }));
+      }
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fs, false, 'Ctrl/Cmd+F must not side-effect Find with fullscreen');
+  assert.equal(ui.nativeFs, false);
+  assert.equal(ui.fsRequests, 0);
+});
+
+uiTest('holding Space does not chatter play/pause', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false);
+  await evaluate(
+    send,
+    `(function(){
+      for (let i = 0; i < 8; i++) {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: ' ',
+          bubbles: true,
+          cancelable: true,
+          repeat: true,
+        }));
+      }
+    })()`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false, 'Space key-repeat must not toggle play');
+});
+
 uiTest('PageDown hops episodes even when the volume range is focused', async (t) => {
   const { send } = await openPlayer(t, { width: 1280, height: 800 }, { phone: false });
   await loopAndPlay(send);
@@ -3539,6 +3584,9 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(cmd('ArrowDown', { ctrlKey: true, metaKey: true }), 'mute');
   assert.equal(cmd('f'), 'toggleFull');
   assert.equal(cmd('F'), 'toggleFull');
+  assert.equal(cmd('f', { ctrlKey: true }), null);
+  assert.equal(cmd('F', { metaKey: true }), null);
+  assert.equal(cmd('f', { altKey: true }), null);
   assert.equal(cmd('ArrowUp', { altKey: true }), null);
   assert.equal(cmd('ArrowLeft'), 'seekBack');
   assert.equal(cmd('ArrowRight'), 'seekFwd');

@@ -135,7 +135,11 @@ export function playerKeyCommand(e) {
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
     return key === 'PageDown' ? 'nextEpisode' : 'prevEpisode';
   }
-  if (key === 'f' || key === 'F') return 'toggleFull';
+  if (key === 'f' || key === 'F') {
+    // Ctrl/Cmd+F is Find; Alt+F is not a Sanem chord.
+    if (e.ctrlKey || e.metaKey || e.altKey) return null;
+    return 'toggleFull';
+  }
   if (key === 'Escape') return 'exitFull';
   return null;
 }
@@ -1650,7 +1654,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     }
     switch (cmd) {
       case 'togglePlay':
-        togglePlay();
+        if (!e.repeat) togglePlay();
         showBar();
         break;
       case 'seekBack':
