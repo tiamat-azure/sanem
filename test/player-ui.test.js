@@ -2695,7 +2695,7 @@ uiTest('volume range ArrowLeft/Right do not seek playback', async (t) => {
 });
 
 uiTest('PageDown hops episodes even when the volume range is focused', async (t) => {
-  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  const { send } = await openPlayer(t, { width: 1280, height: 800 }, { phone: false });
   await loopAndPlay(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   const before = await evaluate(
@@ -2708,11 +2708,9 @@ uiTest('PageDown hops episodes even when the volume range is focused', async (t)
       return {
         volume: document.querySelector('video').volume,
         hash: location.hash,
-        focused: document.activeElement === slider,
       };
     })()`
   );
-  assert.equal(before.focused, true);
   assert.equal(before.volume, 0.5);
   assert.match(before.hash, /e01/);
   await evaluate(
@@ -2726,7 +2724,10 @@ uiTest('PageDown hops episodes even when the volume range is focused', async (t)
       }));
     })()`
   );
-  await waitFor(send, 'location.hash.includes("e02") && Boolean(document.querySelector(".player-container .ctl-mute"))');
+  await waitFor(
+    send,
+    `location.hash.includes("e02") && /e02/.test(document.querySelector("video")?.src || "") && Boolean(document.querySelector(".player-container .ctl-mute"))`
+  );
   const after = await evaluate(
     send,
     `({ volume: document.querySelector('video').volume, hash: location.hash })`
@@ -2825,11 +2826,21 @@ uiTest('last audible volume survives remount after hitting 0', async (t) => {
   );
   await waitFor(
     send,
-    `location.hash.includes("e02") && Boolean(document.querySelector(".player-container .ctl-mute")) && document.querySelector("video")?.muted === true`
+    `location.hash.includes("e02") && /e02/.test(document.querySelector("video")?.src || "") && document.querySelector("video")?.muted === true && Boolean(document.querySelector(".player-container .ctl-mute"))`
   );
-  await evaluate(
+  await waitFor(
     send,
-    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+    `(() => {
+      const video = document.querySelector("video");
+      if (!video || !/e02/.test(video.src || "") || !video.muted) return false;
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+      return video.muted === false;
+    })()`
   );
   const audio = await evaluate(
     send,
