@@ -2806,6 +2806,26 @@ uiTest('holding Space does not chatter play/pause', async (t) => {
   assert.equal(ui.paused, false, 'Space key-repeat must not toggle play');
 });
 
+uiTest('Ctrl/Cmd/Alt+Space do not toggle play', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      for (const extra of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: ' ',
+          bubbles: true,
+          cancelable: true,
+          ...extra,
+        }));
+      }
+    })()`
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.paused, false, 'Ctrl+Space must not steal IME / window-menu chords');
+});
+
 uiTest('PageDown hops episodes even when the volume range is focused', async (t) => {
   const { send } = await openPlayer(t, { width: 1280, height: 800 }, { phone: false });
   await loopAndPlay(send);
@@ -3595,6 +3615,9 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(cmd('ArrowLeft', { metaKey: true }), null);
   assert.equal(cmd('ArrowRight', { ctrlKey: true }), null);
   assert.equal(cmd(' '), 'togglePlay');
+  assert.equal(cmd(' ', { ctrlKey: true }), null);
+  assert.equal(cmd(' ', { metaKey: true }), null);
+  assert.equal(cmd(' ', { altKey: true }), null);
   assert.equal(
     cmd(' ', { target: { tagName: 'BUTTON', closest: (sel) => (sel === 'button' ? {} : null) } }),
     null,

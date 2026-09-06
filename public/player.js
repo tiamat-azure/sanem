@@ -111,7 +111,12 @@ export function playerKeyCommand(e) {
   if (!e || isPlayerTypingTarget(e.target)) return null;
   const key = e.key;
   if (key === ' ' && isButtonTarget(e.target)) return null;
-  if (key === ' ') return 'togglePlay';
+  if (key === ' ') {
+    // S1a: Ctrl/Cmd+Space is IME; Alt+Space is the window menu. Bare Space
+    // still toggles play; key-repeat is ignored in onKey.
+    if (e.ctrlKey || e.metaKey || e.altKey) return null;
+    return 'togglePlay';
+  }
   if (key === 'ArrowLeft' || key === 'ArrowRight') {
     // Focused volume range keeps native horizontal nudging (main behavior).
     if (isRangeInput(e.target)) return null;
