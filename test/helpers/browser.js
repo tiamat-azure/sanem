@@ -122,8 +122,9 @@ async function startServer(t, { playback = 'direct', extraFiles = [], fileMeta =
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(async () => {
-    child.kill();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    child.kill('SIGKILL');
+    await new Promise((r) => setTimeout(r, 50));
+    await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   });
   await waitForHttp(`${baseUrl}/api/session`);
   return { baseUrl, dataDir };
@@ -203,7 +204,7 @@ async function openChrome(t, { touch = true } = {}) {
       `--user-data-dir=${profile}`,
       'about:blank',
     ],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
+    { stdio: 'ignore' }
   );
   t.after(async () => {
     child.kill('SIGKILL');
