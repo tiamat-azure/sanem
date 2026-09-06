@@ -10,6 +10,10 @@ import {
   shouldShowNextEpisode,
   NEXT_UP_LEAD_S,
   EPISODE_BADGE_MS,
+  BAR_HIDE_MS,
+  POINTER_MOVE_MIN_PX,
+  notePointerPosition,
+  pointInRect,
   episodeLabel,
   seriesSiblings,
   scheduleBadgeHide,
@@ -163,6 +167,30 @@ async function openPlayer(
   return { send };
 }
 
+// Real mouse activity must change clientX/Y: Gecko fires zero-delta
+// pointermove on <video>, and the first event only seeds the last pixel.
+async function mouseMoveOnPlayer(send, dx = 48, dy = 36) {
+  await evaluate(
+    send,
+    `(function(){
+      const el = document.querySelector('.player-container');
+      if (!el) throw new Error('missing .player-container');
+      const r = el.getBoundingClientRect();
+      const opts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse' };
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        ...opts,
+        clientX: r.x + 2,
+        clientY: r.y + 2,
+      }));
+      el.dispatchEvent(new PointerEvent('pointermove', {
+        ...opts,
+        clientX: r.x + ${Number(dx)},
+        clientY: r.y + ${Number(dy)},
+      }));
+    })()`
+  );
+}
+
 const SNAPSHOT = `({
   skipBack: Boolean(document.querySelector('[aria-label="Reculer de 10 secondes"]')),
   skipFwd: Boolean(document.querySelector('[aria-label="Avancer de 10 secondes"]')),
@@ -171,6 +199,15 @@ const SNAPSHOT = `({
   menuHidden: document.getElementById('app-menu')?.hidden ?? null,
   menuText: document.getElementById('app-menu')?.innerText ?? '',
   controlsVisible: document.querySelector('.player-container')?.classList.contains('controls-visible') ?? false,
+  cursor: (() => {
+    const el = document.querySelector('.player-container');
+    const video = document.querySelector('.player-video') || document.querySelector('video');
+    if (!el) return null;
+    return {
+      container: getComputedStyle(el).cursor,
+      video: video ? getComputedStyle(video).cursor : null,
+    };
+  })(),
   toolbarPlay: Boolean(document.querySelector('.control-bar .ctl-play')) ||
     Boolean(document.querySelector('.control-bar [aria-label="Lire"], .control-bar [aria-label="Pause"]')),
   centerPlay: (() => {
@@ -478,6 +515,8 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'toolbar auto-hides 2s after playback starts');
+  assert.equal(ui.cursor.container, 'none', 'cursor hides with the toolbar');
+  assert.equal(ui.cursor.video, 'none', 'video surface cursor hides with the toolbar');
   assert.equal(ui.paused, false);
 
   await tapVideoCenter(send);
@@ -487,6 +526,7 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.paused, true, 'single surface tap still pauses after the double-tap delay');
   assert.equal(ui.controlsVisible, true, 'tap on playing video shows the toolbar');
+  assert.notEqual(ui.cursor.container, 'none', 'cursor returns when chrome is shown');
   assert.equal(ui.centerPlay, true, 'paused state shows the center play icon');
   assert.equal(ui.centerPlayTag, 'BUTTON', 'center play must be a real button');
   assert.equal(ui.centerPlayLabel, 'Lire', 'center play must have an accessible name');
@@ -507,6 +547,7 @@ uiTest('player overlay hide delay, pause-on-tap and resume-on-tap', async (t) =>
   );
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false, 'toolbar fades 2s after resume');
+  assert.equal(ui.cursor.container, 'none', 'cursor hides again after resume idle');
   assert.equal(ui.paused, false);
 });
 
@@ -640,12 +681,77 @@ uiTest('mouse move reveals a hidden toolbar', async (t) => {
   );
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, false);
+  assert.equal(ui.cursor.container, 'none', 'idle playback hides the mouse cursor');
+  assert.equal(ui.cursor.video, 'none');
   assert.equal(ui.paused, false);
+  await mouseMoveOnPlayer(send);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'mouse pointermove must reveal a hidden toolbar');
+  assert.notEqual(ui.cursor.container, 'none', 'moving the mouse restores the cursor with chrome');
+  assert.equal(ui.paused, false, 'revealing the bar with the mouse must not pause playback');
+});
+
+uiTest('same-coordinate pointermove does not reveal chrome (Firefox video quirk)', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  await mouseMoveOnPlayer(send, 48, 36);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'a real move must reveal chrome');
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false);
+  assert.equal(ui.cursor.container, 'none');
   await evaluate(
     send,
     `(function(){
       const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
+      const video = document.querySelector('video');
+      const r = el.getBoundingClientRect();
+      const x = r.x + 48;
+      const y = r.y + 36;
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: x,
+        clientY: y,
+      };
+      for (let i = 0; i < 25; i += 1) {
+        video.dispatchEvent(new PointerEvent('pointermove', opts));
+        el.dispatchEvent(new PointerEvent('pointermove', opts));
+      }
+    })()`
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'Gecko-style zero-delta pointermove must not reveal chrome');
+  assert.equal(ui.cursor.container, 'none', 'cursor stays hidden through zero-delta moves');
+  assert.equal(ui.paused, false);
+  await mouseMoveOnPlayer(send, 80, 70);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, true, 'a later real move still reveals chrome');
+  assert.notEqual(ui.cursor.container, 'none');
+});
+
+uiTest('pointermove over the video drops a stale chrome hover hold', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(
+    send,
+    `(function(){
+      const bar = document.querySelector('.control-bar');
+      bar.dispatchEvent(new PointerEvent('pointerenter', {
         bubbles: true,
         cancelable: true,
         pointerId: 1,
@@ -653,9 +759,70 @@ uiTest('mouse move reveals a hidden toolbar', async (t) => {
       }));
     })()`
   );
-  ui = await evaluate(send, SNAPSHOT);
-  assert.equal(ui.controlsVisible, true, 'mouse pointermove must reveal a hidden toolbar');
-  assert.equal(ui.paused, false, 'revealing the bar with the mouse must not pause playback');
+  await new Promise((r) => setTimeout(r, 400));
+  await evaluate(
+    send,
+    `(function(){
+      const video = document.querySelector('video');
+      const r = video.getBoundingClientRect();
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        clientX: r.x + r.width / 2,
+        clientY: r.y + r.height / 2,
+      };
+      video.dispatchEvent(new PointerEvent('pointermove', opts));
+      video.dispatchEvent(new PointerEvent('pointermove', opts));
+    })()`
+  );
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'stale pointerenter must not trap hide after video pointermove');
+  assert.equal(ui.cursor.container, 'none');
+  assert.equal(ui.paused, false);
+});
+
+uiTest('mouse-click focus on a bar control does not trap auto-hide', async (t) => {
+  const { send } = await openPlayer(t, { width: 500, height: 800 }, { phone: false });
+  await loopAndPlay(send);
+  await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
+  await evaluate(
+    send,
+    `(function(){
+      const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const bar = document.querySelector('.control-bar');
+      const opts = { bubbles: true, cancelable: true, pointerId: 21, pointerType: 'mouse' };
+      mute.dispatchEvent(new PointerEvent('pointerdown', opts));
+      mute.focus();
+      document.dispatchEvent(new PointerEvent('pointerup', opts));
+      bar.dispatchEvent(new PointerEvent('pointerleave', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 21,
+        pointerType: 'mouse',
+      }));
+    })()`
+  );
+  const focused = await evaluate(
+    send,
+    'document.querySelector(".control-bar")?.contains(document.activeElement)'
+  );
+  assert.equal(focused, false, 'mouse click must not leave :focus-visible-less focus on the bar');
+  await waitFor(
+    send,
+    'document.querySelector(".player-container")?.classList.contains("controls-visible") === false',
+    3000
+  );
+  const ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.controlsVisible, false, 'clicking a control then leaving must still auto-hide');
+  assert.equal(ui.cursor.container, 'none');
+  assert.equal(ui.paused, false);
 });
 
 uiTest('hovering the control bar holds it visible and clicks hit controls', async (t) => {
@@ -2332,18 +2499,7 @@ uiTest('cast prompt is only opened from a user gesture', async (t) => {
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.remotePrompts, 0, 'prompt must wait for a click/tap');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.controlsVisible, true);
@@ -2376,18 +2532,7 @@ uiTest('cast button reflects connected state and does not pause playback', async
   );
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
   await loopAndPlay(send);
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
@@ -2416,18 +2561,7 @@ uiTest('prompt reject while connected keeps the signed src', async (t) => {
     { remotePlayback: { available: true, promptRejectWhenLive: true } }
   );
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
@@ -2451,18 +2585,7 @@ uiTest('cast button hides after disconnect if devices disappeared while live', a
     { remotePlayback: { available: true } }
   );
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
@@ -2474,18 +2597,7 @@ uiTest('cast button hides after disconnect if devices disappeared while live', a
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.cast.hidden, false, 'stay visible while still connected even if devices drop');
   assert.equal(ui.cast.pressed, 'true');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
   ui = await evaluate(send, SNAPSHOT);
@@ -2578,18 +2690,7 @@ uiTest('teardown cancels an active Remote Playback session once', async (t) => {
     { remotePlayback: { available: true } }
   );
   await waitFor(send, 'document.querySelector(".cast-btn")?.hidden === false');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await waitCastReady(send);
   await clickSelector(send, '.cast-btn');
@@ -2613,18 +2714,7 @@ uiTest('cast prompt is skipped when signed URL mint fails', async (t) => {
   await new Promise((r) => setTimeout(r, 250));
   const ready = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
   assert.equal(ready, null);
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
   await new Promise((r) => setTimeout(r, 200));
@@ -2655,18 +2745,7 @@ uiTest('prompt cancel restores the cookie-gated src', async (t) => {
     })()`
   );
   await waitFor(send, '(document.querySelector("video")?.currentTime || 0) >= 0.5');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
   await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
@@ -2694,18 +2773,7 @@ uiTest('prompt fulfill while disconnected restores the cookie-gated src', async 
     { remotePlayback: { available: true, promptDismiss: true } }
   );
   await waitCastReady(send);
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
   await waitFor(send, '(window.__remotePrompts ?? 0) >= 1');
@@ -2747,18 +2815,7 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
     'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")'
   );
   assert.equal(readyBefore, null, 'click before prefetch must exercise the refresh chain');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await waitFor(send, 'location.hash.includes("e01")');
   await clickSelector(send, '.cast-btn');
@@ -2786,6 +2843,36 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   assert.match(ui.videoSrc, /\/api\/media\/Serie\/e01\.mp4/);
   assert.match(ui.videoSrc, /[?&]sig=/);
   assert.match(await evaluate(send, 'location.hash'), /e01/, 'must not have auto-chained off the minting episode');
+});
+
+test('notePointerPosition ignores the seed event and zero-delta moves', () => {
+  assert.equal(BAR_HIDE_MS, 2000);
+  assert.equal(POINTER_MOVE_MIN_PX, 1);
+  const seed = notePointerPosition(null, 10, 20);
+  assert.equal(seed.moved, false, 'first pixel only seeds last position');
+  assert.deepEqual(seed.pos, { x: 10, y: 20 });
+  const same = notePointerPosition(seed.pos, 10, 20);
+  assert.equal(same.moved, false, 'Firefox same-coordinate pointermove is not activity');
+  assert.deepEqual(same.pos, { x: 10, y: 20 });
+  const jitter = notePointerPosition(seed.pos, 10.4, 20.2);
+  assert.equal(jitter.moved, false, 'sub-pixel jitter must not accumulate into a reveal');
+  assert.deepEqual(jitter.pos, { x: 10, y: 20 });
+  const moved = notePointerPosition(seed.pos, 12, 20);
+  assert.equal(moved.moved, true);
+  assert.deepEqual(moved.pos, { x: 12, y: 20 });
+  const nan = notePointerPosition(seed.pos, Number.NaN, 20);
+  assert.equal(nan.moved, false);
+  assert.deepEqual(nan.pos, { x: 10, y: 20 });
+});
+
+test('pointInRect is a closed box used for chrome hover-hold', () => {
+  const box = { left: 0, right: 10, top: 0, bottom: 10 };
+  assert.equal(pointInRect(box, 0, 0), true);
+  assert.equal(pointInRect(box, 10, 10), true);
+  assert.equal(pointInRect(box, 5, 5), true);
+  assert.equal(pointInRect(box, 11, 5), false);
+  assert.equal(pointInRect(box, 5, -1), false);
+  assert.equal(pointInRect(null, 1, 1), false);
 });
 
 test('episodeLabel reads the number off a release-style filename', () => {
@@ -2881,18 +2968,7 @@ uiTest('hostile mint URL is not assigned and does not prompt', async (t) => {
   await new Promise((r) => setTimeout(r, 250));
   const ready = await evaluate(send, 'document.querySelector(".cast-btn")?.getAttribute("data-cast-ready")');
   assert.equal(ready, null, 'rejected mint must not mark the button ready');
-  await evaluate(
-    send,
-    `(function(){
-      const el = document.querySelector('.player-container');
-      el.dispatchEvent(new PointerEvent('pointermove', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 1,
-        pointerType: 'mouse',
-      }));
-    })()`
-  );
+  await mouseMoveOnPlayer(send);
   await waitFor(send, 'document.querySelector(".player-container")?.classList.contains("controls-visible") === true');
   await clickSelector(send, '.cast-btn');
   await new Promise((r) => setTimeout(r, 200));

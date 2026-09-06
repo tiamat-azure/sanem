@@ -1033,6 +1033,23 @@ html.player-fs body {
   pointer-events: auto;
 }
 
+/* Same idle timeout as the toolbar: hide the OS cursor while chrome is
+   gone so it cannot sit on the picture. Restored with controls-visible. */
+.player-container:not(.controls-visible),
+.player-container:not(.controls-visible) * {
+  cursor: none;
+}
+
+.player-container:not(.controls-visible) .next-overlay,
+.player-container:not(.controls-visible) .next-overlay * {
+  cursor: pointer;
+}
+
+html.player-fs:has(.player-container:not(.controls-visible)),
+html.player-fs:has(.player-container:not(.controls-visible)) body {
+  cursor: none;
+}
+
 .cast-btn {
   position: absolute;
   top: max(10px, env(safe-area-inset-top, 0px));
