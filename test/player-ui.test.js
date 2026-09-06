@@ -29,6 +29,7 @@ import {
   playerKeyCommand,
   isPlayerTypingTarget,
   volumeAfterUnmute,
+  volumeToPersist,
 } from '../public/player.js';
 import {
   PLAY_PATH,
@@ -2669,6 +2670,100 @@ uiTest('unmute after ArrowDown to 0 restores a non-zero volume', async (t) => {
   assert.ok(audio.volume > 0, `unmute after bump-to-zero must restore sound, got ${audio.volume}`);
 });
 
+uiTest('volume range ArrowLeft/Right do not seek playback', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.currentTime = 1;
+      const slider = document.querySelector('.volume');
+      slider.value = '0.5';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.focus();
+      slider.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowLeft',
+        bubbles: true,
+        cancelable: true,
+      }));
+    })()`
+  );
+  const after = await evaluate(
+    send,
+    `({ t: document.querySelector('video').currentTime, ae: document.activeElement?.className })`
+  );
+  assert.ok(after.ae.includes('volume'), 'volume range must keep focus');
+  assert.ok(after.t > 0.4, `ArrowLeft on volume must not seek -10s, currentTime=${after.t}`);
+});
+
+uiTest('mute click restores audio when silenced even if muted is false', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      const v = document.querySelector('video');
+      v.volume = 0;
+      v.muted = false;
+      v.dispatchEvent(new Event('volumechange'));
+    })()`
+  );
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_UNMUTE);
+  await evaluate(send, 'document.querySelector(".ctl-mute").click()');
+  const audio = await evaluate(
+    send,
+    `({
+      volume: document.querySelector('video').volume,
+      muted: document.querySelector('video').muted,
+      label: document.querySelector('.ctl-mute')?.getAttribute('aria-label'),
+    })`
+  );
+  assert.equal(audio.muted, false);
+  assert.equal(audio.volume, 0.4);
+  assert.equal(audio.label, TIP_MUTE);
+});
+
+uiTest('last audible volume survives remount after hitting 0', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.value = '0';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`
+  );
+  const stored = await evaluate(
+    send,
+    `({ volume: localStorage.getItem('sanem-volume'), muted: localStorage.getItem('sanem-muted') })`
+  );
+  assert.equal(stored.volume, '0.4', 'VOLUME_KEY must keep last non-zero, not 0');
+  assert.equal(stored.muted, '1');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true }))`
+  );
+  await waitFor(send, 'location.hash.includes("e02") && Boolean(document.querySelector("video"))');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  const audio = await evaluate(
+    send,
+    `({ volume: document.querySelector('video').volume, muted: document.querySelector('video').muted })`
+  );
+  assert.equal(audio.muted, false);
+  assert.equal(audio.volume, 0.4, 'remount must seed last audible from VOLUME_KEY');
+});
+
 uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
@@ -3260,6 +3355,14 @@ test('volumeAfterUnmute restores last audible when volume is 0', () => {
   assert.equal(volumeAfterUnmute(0, 1.5), 1);
 });
 
+test('volumeToPersist never stores zero', () => {
+  assert.equal(volumeToPersist(0.4, 0.8), 0.4);
+  assert.equal(volumeToPersist(0, 0.4), 0.4);
+  assert.equal(volumeToPersist(0, 0), null);
+  assert.equal(volumeToPersist(0, Number.NaN), null);
+  assert.equal(volumeToPersist(1.5, 0.2), 1);
+});
+
 test('playerKeyCommand maps watching shortcuts and ignores typing targets', () => {
   assert.equal(VOLUME_STEP, 0.05);
   assert.equal(TIP_MUTE, 'Couper le son (raccourci : Contrôle + flèche en bas)');
@@ -3277,6 +3380,7 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   assert.equal(cmd('F'), 'toggleFull');
   assert.equal(cmd('ArrowUp', { altKey: true }), null);
   assert.equal(cmd('ArrowLeft'), 'seekBack');
+  assert.equal(cmd('ArrowRight'), 'seekFwd');
   assert.equal(cmd(' '), 'togglePlay');
   assert.equal(
     cmd(' ', { target: { tagName: 'BUTTON', closest: (sel) => (sel === 'button' ? {} : null) } }),
@@ -3289,6 +3393,17 @@ test('playerKeyCommand maps watching shortcuts and ignores typing targets', () =
   const range = { tagName: 'INPUT', type: 'range' };
   assert.equal(isPlayerTypingTarget(range), false);
   assert.equal(playerKeyCommand({ key: 'ArrowUp', target: range, ctrlKey: false, altKey: false }), 'volumeUp');
+  assert.equal(playerKeyCommand({ key: 'ArrowDown', target: range, ctrlKey: false, altKey: false }), 'volumeDown');
+  assert.equal(playerKeyCommand({ key: 'ArrowDown', target: range, ctrlKey: true, altKey: false }), 'mute');
+  assert.equal(
+    playerKeyCommand({ key: 'ArrowLeft', target: range, ctrlKey: false, altKey: false }),
+    null,
+    'focused volume range must keep native Left/Right'
+  );
+  assert.equal(
+    playerKeyCommand({ key: 'ArrowRight', target: range, ctrlKey: false, altKey: false }),
+    null
+  );
   assert.equal(isPlayerTypingTarget({ tagName: 'TEXTAREA' }), true);
   assert.equal(isPlayerTypingTarget({ tagName: 'DIV', isContentEditable: true }), true);
   assert.equal(isPlayerTypingTarget({ tagName: 'DIV' }), false);

@@ -79,8 +79,12 @@ function isButtonTarget(target) {
   return typeof target.closest === 'function' && Boolean(target.closest('button'));
 }
 
-// Pure mapping so key handling can be unit-tested without Chrome.
-// Returns a command name, or null when the event is not a player shortcut.
+function isRangeInput(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.tagName !== 'INPUT') return false;
+  return String(target.type || '').toLowerCase() === 'range';
+}
+
 // Unmute after ArrowDown/`bumpVolume` hit 0 must restore sound: clearing
 // `muted` alone leaves volume at 0. Prefer the last non-zero level.
 export function volumeAfterUnmute(volume, lastAudible, fallback = VOLUME_STEP) {
@@ -91,13 +95,27 @@ export function volumeAfterUnmute(volume, lastAudible, fallback = VOLUME_STEP) {
   return fallback;
 }
 
+// Never persist 0: unmute-after-remount needs the last audible level.
+export function volumeToPersist(volume, lastAudible) {
+  const current = Number(volume);
+  if (Number.isFinite(current) && current > 0) return Math.min(1, current);
+  const last = Number(lastAudible);
+  if (Number.isFinite(last) && last > 0) return Math.min(1, last);
+  return null;
+}
+
+// Pure mapping so key handling can be unit-tested without Chrome.
+// Returns a command name, or null when the event is not a player shortcut.
 export function playerKeyCommand(e) {
   if (!e || isPlayerTypingTarget(e.target)) return null;
   const key = e.key;
   if (key === ' ' && isButtonTarget(e.target)) return null;
   if (key === ' ') return 'togglePlay';
-  if (key === 'ArrowLeft') return 'seekBack';
-  if (key === 'ArrowRight') return 'seekFwd';
+  if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    // Focused volume range keeps native horizontal nudging (main behavior).
+    if (isRangeInput(e.target)) return null;
+    return key === 'ArrowLeft' ? 'seekBack' : 'seekFwd';
+  }
   if (key === 'ArrowUp' || key === 'ArrowDown') {
     if (e.altKey) return null;
     if (e.ctrlKey) return key === 'ArrowUp' ? 'unmute' : 'mute';
@@ -493,7 +511,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
 
   // --- restore volume / position ---
   const savedVol = Number(localStorage.getItem(VOLUME_KEY));
-  video.volume = Number.isFinite(savedVol) ? Math.min(1, Math.max(0, savedVol)) : 1;
+  video.volume = Number.isFinite(savedVol) && savedVol > 0 ? Math.min(1, savedVol) : 1;
   video.muted = localStorage.getItem(MUTED_KEY) === '1';
   volume.value = String(video.muted ? 0 : video.volume);
   let lastAudible = video.volume > 0 ? video.volume : 0;
@@ -546,7 +564,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     const silenced = video.muted || video.volume === 0;
     setIcon(btnMute, silenced ? 'i-mute' : 'i-volume');
     nameControl(btnMute, silenced ? TIP_UNMUTE : TIP_MUTE);
-    volume.value = String(video.muted ? 0 : video.volume);
+    volume.value = String(silenced ? 0 : video.volume);
     const atEnd = !nextOverlay.hidden && nextOverlay.classList.contains('is-end');
     centerPlay.hidden = !video.paused || atEnd || holdSeeking;
     centerPlay.setAttribute('aria-label', video.paused ? 'Lire' : 'Pause');
@@ -745,9 +763,10 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
 
   const persistAudio = () => {
     if (video.volume > 0) lastAudible = video.volume;
-    localStorage.setItem(VOLUME_KEY, String(video.volume));
-    localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
-    volume.value = String(video.muted ? 0 : video.volume);
+    const stored = volumeToPersist(video.volume, lastAudible);
+    if (stored != null) localStorage.setItem(VOLUME_KEY, String(stored));
+    localStorage.setItem(MUTED_KEY, video.muted || video.volume === 0 ? '1' : '0');
+    volume.value = String(video.muted || video.volume === 0 ? 0 : video.volume);
   };
   const bumpVolume = (delta) => {
     const next = Math.min(1, Math.max(0, Math.round((video.volume + delta) * 20) / 20));
@@ -764,7 +783,8 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     persistAudio();
   };
   btnMute.addEventListener('click', () => {
-    setMuted(!video.muted);
+    const silenced = video.muted || video.volume === 0;
+    setMuted(!silenced);
   });
   volume.addEventListener('input', () => {
     video.volume = Number(volume.value);
