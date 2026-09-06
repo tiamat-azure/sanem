@@ -1785,19 +1785,31 @@ uiTest('previous-episode control loads the previous file', async (t) => {
   assert.match(hash, /e01/);
 });
 
-const NATIVE_FS_KEPT = `(() => {
-  const el = document.querySelector('.player-container');
-  return Boolean(el)
-    && (document.fullscreenElement || document.webkitFullscreenElement) === el
-    && el.classList.contains('is-fullscreen')
-    && !el.classList.contains('is-fake-fullscreen');
-})()`;
-const OVERLAY_FS_KEPT = `(() => {
-  const el = document.querySelector('.player-container');
-  return Boolean(el)
-    && el.classList.contains('is-fullscreen')
-    && el.classList.contains('is-fake-fullscreen');
-})()`;
+// Hash updates in onNext before hashchange remounts. Waiting on hash +
+// "current container is fullscreen" can pass against the old node (still
+// native FS, no new request). The new episode's video src is set on the
+// remounted node.
+function nativeFsKeptOn(ep) {
+  return `(() => {
+    const el = document.querySelector('.player-container');
+    const src = document.querySelector('video')?.getAttribute('src') || '';
+    return Boolean(el)
+      && src.includes(${JSON.stringify(ep)})
+      && (document.fullscreenElement || document.webkitFullscreenElement) === el
+      && el.classList.contains('is-fullscreen')
+      && !el.classList.contains('is-fake-fullscreen');
+  })()`;
+}
+function overlayFsKeptOn(ep) {
+  return `(() => {
+    const el = document.querySelector('.player-container');
+    const src = document.querySelector('video')?.getAttribute('src') || '';
+    return Boolean(el)
+      && src.includes(${JSON.stringify(ep)})
+      && el.classList.contains('is-fullscreen')
+      && el.classList.contains('is-fake-fullscreen');
+  })()`;
+}
 
 uiTest('next during native grace does not let the old request drop remount FS', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
@@ -1807,7 +1819,7 @@ uiTest('next during native grace does not let the old request drop remount FS', 
   const exitsAtHop = await evaluate(send, 'window.__fsExits ?? 0');
   await tapSelector(send, '.ctl-next');
   await waitFor(send, 'location.hash.includes("e02")');
-  await waitFor(send, NATIVE_FS_KEPT);
+  await waitFor(send, nativeFsKeptOn('e02'));
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true, 'remount must still adopt native FS after a mid-grace hop');
   assert.equal(ui.fs, true);
@@ -1818,6 +1830,13 @@ uiTest('next during native grace does not let the old request drop remount FS', 
 
 uiTest('next and previous keep native fullscreen across the remount', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      if (v) { v.loop = true; v.pause(); }
+    })()`
+  );
   await installFullscreenStub(send, 'succeed');
   await clickFullscreen(send);
   let ui = await evaluate(send, SNAPSHOT);
@@ -1825,7 +1844,7 @@ uiTest('next and previous keep native fullscreen across the remount', async (t) 
   const requestsAtFull = ui.fsRequests;
   await tapSelector(send, '.ctl-next');
   await waitFor(send, 'location.hash.includes("e02")');
-  await waitFor(send, NATIVE_FS_KEPT);
+  await waitFor(send, nativeFsKeptOn('e02'));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true, 'native FS must survive next-episode remount');
   assert.equal(ui.fs, true);
@@ -1837,7 +1856,7 @@ uiTest('next and previous keep native fullscreen across the remount', async (t) 
   await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
   await tapSelector(send, '.ctl-prev');
   await waitFor(send, 'location.hash.includes("e01")');
-  await waitFor(send, NATIVE_FS_KEPT);
+  await waitFor(send, nativeFsKeptOn('e01'));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true, 'native FS must survive previous-episode remount');
   assert.equal(ui.fs, true);
@@ -1863,7 +1882,7 @@ uiTest('next chip and previous keep overlay fullscreen across the remount', asyn
   );
   await clickSelector(send, '.next-up-btn');
   await waitFor(send, 'location.hash.includes("e02")');
-  await waitFor(send, OVERLAY_FS_KEPT);
+  await waitFor(send, overlayFsKeptOn('e02'));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, true, 'overlay FS must survive next-episode remount');
   assert.equal(ui.fakeFs, true);
@@ -1875,7 +1894,7 @@ uiTest('next chip and previous keep overlay fullscreen across the remount', asyn
   await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
   await tapSelector(send, '.ctl-prev');
   await waitFor(send, 'location.hash.includes("e01")');
-  await waitFor(send, OVERLAY_FS_KEPT);
+  await waitFor(send, overlayFsKeptOn('e01'));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fakeFs, true, 'overlay FS must survive previous-episode remount');
   assert.equal(ui.fs, true);
@@ -1903,7 +1922,7 @@ uiTest('ended auto-chain keeps native fullscreen', async (t) => {
     })()`
   );
   await waitFor(send, 'location.hash.includes("e02")');
-  await waitFor(send, NATIVE_FS_KEPT);
+  await waitFor(send, nativeFsKeptOn('e02'));
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true, 'ended auto-chain must stay in native fullscreen');
   assert.equal(ui.fakeFs, false);
