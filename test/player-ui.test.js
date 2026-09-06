@@ -2429,7 +2429,7 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
     { phone: false, extraFiles: ['Serie/e00.mp4'] }
   );
   await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
-  const ui = await evaluate(send, SNAPSHOT);
+  let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.prevCtl.text, '');
   assert.equal(ui.nextCtl.text, '');
   assert.equal(ui.prevCtl.label, TIP_PREV);
