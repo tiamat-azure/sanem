@@ -29,6 +29,7 @@ import {
   VOLUME_STEP,
   playerKeyCommand,
   isPlayerTypingTarget,
+  volumeAfterUnmute,
 } from '../public/player.js';
 import {
   PLAY_PATH,
@@ -2590,6 +2591,77 @@ uiTest('ArrowUp and ArrowDown adjust volume; text inputs keep their keys', async
   assert.equal(stolen.hash, stolen.before, 'PageDown must not hop while a text input is focused');
 });
 
+uiTest('Ctrl+ArrowUp after volume hits 0 restores last audible level', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.value = '0';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`
+  );
+  let audio = await evaluate(
+    send,
+    `({ volume: document.querySelector('video').volume, muted: document.querySelector('video').muted })`
+  );
+  assert.equal(audio.volume, 0);
+  assert.equal(audio.muted, true);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  audio = await evaluate(
+    send,
+    `({
+      volume: document.querySelector('video').volume,
+      muted: document.querySelector('video').muted,
+      label: document.querySelector('.ctl-mute')?.getAttribute('aria-label'),
+    })`
+  );
+  assert.equal(audio.muted, false);
+  assert.equal(audio.volume, 0.4, 'unmute must restore the last non-zero volume, not stay at 0');
+  assert.equal(audio.label, TIP_MUTE);
+});
+
+uiTest('unmute after ArrowDown to 0 restores a non-zero volume', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const slider = document.querySelector('.volume');
+      slider.value = '0.1';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`
+  );
+  for (let i = 0; i < 4; i += 1) {
+    await evaluate(
+      send,
+      `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))`
+    );
+  }
+  let audio = await evaluate(
+    send,
+    `({ volume: document.querySelector('video').volume, muted: document.querySelector('video').muted })`
+  );
+  assert.equal(audio.volume, 0);
+  assert.equal(audio.muted, true);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  audio = await evaluate(
+    send,
+    `({ volume: document.querySelector('video').volume, muted: document.querySelector('video').muted })`
+  );
+  assert.equal(audio.muted, false);
+  assert.ok(audio.volume > 0, `unmute after bump-to-zero must restore sound, got ${audio.volume}`);
+});
+
 uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await loopAndPlay(send);
@@ -3171,6 +3243,14 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   assert.match(ui.videoSrc, /\/api\/media\/Serie\/e01\.mp4/);
   assert.match(ui.videoSrc, /[?&]sig=/);
   assert.match(await evaluate(send, 'location.hash'), /e01/, 'must not have auto-chained off the minting episode');
+});
+
+test('volumeAfterUnmute restores last audible when volume is 0', () => {
+  assert.equal(volumeAfterUnmute(0.8, 0.4), 0.8);
+  assert.equal(volumeAfterUnmute(0, 0.4), 0.4);
+  assert.equal(volumeAfterUnmute(0, 0), VOLUME_STEP);
+  assert.equal(volumeAfterUnmute(0, Number.NaN), VOLUME_STEP);
+  assert.equal(volumeAfterUnmute(0, 1.5), 1);
 });
 
 test('playerKeyCommand maps watching shortcuts and ignores typing targets', () => {

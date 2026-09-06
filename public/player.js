@@ -82,6 +82,16 @@ function isButtonTarget(target) {
 
 // Pure mapping so key handling can be unit-tested without Chrome.
 // Returns a command name, or null when the event is not a player shortcut.
+// Unmute after ArrowDown/`bumpVolume` hit 0 must restore sound: clearing
+// `muted` alone leaves volume at 0. Prefer the last non-zero level.
+export function volumeAfterUnmute(volume, lastAudible, fallback = VOLUME_STEP) {
+  const current = Number(volume);
+  if (Number.isFinite(current) && current > 0) return Math.min(1, current);
+  const last = Number(lastAudible);
+  if (Number.isFinite(last) && last > 0) return Math.min(1, last);
+  return fallback;
+}
+
 export function playerKeyCommand(e) {
   if (!e || isPlayerTypingTarget(e.target)) return null;
   const key = e.key;
@@ -487,6 +497,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   video.volume = Number.isFinite(savedVol) ? Math.min(1, Math.max(0, savedVol)) : 1;
   video.muted = localStorage.getItem(MUTED_KEY) === '1';
   volume.value = String(video.muted ? 0 : video.volume);
+  let lastAudible = video.volume > 0 ? video.volume : 0;
 
   const resumeAt = loadPosition(file.path);
   let resumeApplied = false;
@@ -734,6 +745,7 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
   nextOverlay.addEventListener('pointerup', (e) => e.stopPropagation());
 
   const persistAudio = () => {
+    if (video.volume > 0) lastAudible = video.volume;
     localStorage.setItem(VOLUME_KEY, String(video.volume));
     localStorage.setItem(MUTED_KEY, video.muted ? '1' : '0');
     volume.value = String(video.muted ? 0 : video.volume);
@@ -745,6 +757,10 @@ export function mountPlayer(root, { file, next, prev, onNext }) {
     persistAudio();
   };
   const setMuted = (muted) => {
+    if (!muted) {
+      // V1a: unmute after volume hit 0 must restore a non-zero level.
+      video.volume = volumeAfterUnmute(video.volume, lastAudible);
+    }
     video.muted = Boolean(muted);
     persistAudio();
   };
