@@ -18,6 +18,17 @@ import {
   episodeLabel,
   seriesSiblings,
   scheduleBadgeHide,
+  TIP_MUTE,
+  TIP_UNMUTE,
+  TIP_VOLUME_UP,
+  TIP_VOLUME_DOWN,
+  TIP_PREV,
+  TIP_NEXT,
+  TIP_FS_ENTER,
+  TIP_FS_EXIT,
+  VOLUME_STEP,
+  playerKeyCommand,
+  isPlayerTypingTarget,
 } from '../public/player.js';
 import {
   PLAY_PATH,
@@ -266,6 +277,7 @@ const SNAPSHOT = `({
             text: (el.innerText ?? '').trim(),
             icon: el.querySelector('use')?.getAttribute('href') ?? null,
             tip: getComputedStyle(el, '::after').content,
+            title: el.getAttribute('title'),
           }
         : null;
     return {
@@ -277,6 +289,7 @@ const SNAPSHOT = `({
       hasTip: btn?.classList.contains('has-tip') ?? false,
       icon: btn?.querySelector('use')?.getAttribute('href') ?? null,
       tip: btn ? getComputedStyle(btn, '::after').content : '',
+      title: btn?.getAttribute('title') ?? null,
       prev: chip(prevBtn),
       plate: btn
         ? (() => {
@@ -308,8 +321,9 @@ const SNAPSHOT = `({
     return (document.fullscreenElement || document.webkitFullscreenElement) === el;
   })(),
   htmlFs: document.documentElement.classList.contains('player-fs'),
-  fsLabel: document.querySelector('.ctl-fs, .player-container button[aria-label="Plein écran"], .player-container button[aria-label="Quitter le plein écran"]')?.getAttribute('aria-label') ?? null,
+  fsLabel: document.querySelector('.ctl-fs')?.getAttribute('aria-label') ?? null,
   fsHasTip: document.querySelector('.ctl-fs')?.classList.contains('has-tip') ?? false,
+  fsTitle: document.querySelector('.ctl-fs')?.getAttribute('title') ?? null,
   fsIcon: document.querySelector('.ctl-fs use')?.getAttribute('href') ?? null,
   fsRequests: window.__fsRequests ?? 0,
   fsExits: window.__fsExits ?? 0,
@@ -354,6 +368,7 @@ const SNAPSHOT = `({
       text: (el.innerText || '').trim(),
       icon: el.querySelector('use')?.getAttribute('href') ?? null,
       tip: getComputedStyle(el, '::after').content,
+      title: el.getAttribute('title'),
     };
   })(),
   nextCtl: (() => {
@@ -366,6 +381,29 @@ const SNAPSHOT = `({
       text: (el.innerText || '').trim(),
       icon: el.querySelector('use')?.getAttribute('href') ?? null,
       tip: getComputedStyle(el, '::after').content,
+      title: el.getAttribute('title'),
+    };
+  })(),
+  muteCtl: (() => {
+    const el = document.querySelector('.ctl-mute');
+    if (!el) return null;
+    return {
+      label: el.getAttribute('aria-label'),
+      hasTip: el.classList.contains('has-tip'),
+      title: el.getAttribute('title'),
+      icon: el.querySelector('use')?.getAttribute('href') ?? null,
+    };
+  })(),
+  volumeCtl: (() => {
+    const wrap = document.querySelector('.volume-wrap');
+    const input = document.querySelector('.volume');
+    if (!wrap && !input) return null;
+    return {
+      wrapLabel: wrap?.getAttribute('aria-label') ?? null,
+      wrapHasTip: wrap?.classList.contains('has-tip') ?? false,
+      wrapTitle: wrap?.getAttribute('title') ?? null,
+      inputLabel: input?.getAttribute('aria-label') ?? null,
+      inputTitle: input?.getAttribute('title') ?? null,
     };
   })(),
   viewport: { w: window.innerWidth, h: window.innerHeight, portrait: window.matchMedia('(orientation: portrait)').matches },
@@ -442,11 +480,11 @@ uiTest('player UI on a smartphone portrait viewport', async (t) => {
   assert.equal(ui.bar.nextVisible, true, 'next-episode control should be present for wrap check');
   assert.equal(ui.bar.prevVisible, false, 'first episode has no previous control');
   assert.equal(ui.nextCtl.text, '', 'next is icon-only');
-  assert.equal(ui.nextCtl.label, 'Épisode suivant');
+  assert.equal(ui.nextCtl.label, TIP_NEXT);
   assert.equal(ui.nextCtl.hasTip, true);
   assert.equal(ui.nextCtl.icon, '#i-next');
   assert.equal(ui.fsIcon, '#i-fullscreen');
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
   assert.equal(ui.bar.stacked, false, 'toolbar children stacked onto a second line');
   assert.ok(ui.bar.wrap < 8, `toolbar wrapped by ${ui.bar.wrap}px`);
   assert.ok(ui.bar.height < 72, `toolbar height ${ui.bar.height} looks like two rows`);
@@ -796,14 +834,14 @@ uiTest('mouse-click focus on a bar control does not trap auto-hide', async (t) =
   await evaluate(
     send,
     `(function(){
-      const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const mute = document.querySelector('.control-bar .ctl-mute');
       mute.focus({ preventScroll: true, focusVisible: false });
     })()`
   );
   const focus = await evaluate(
     send,
     `(function(){
-      const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const mute = document.querySelector('.control-bar .ctl-mute');
       const ae = document.activeElement;
       return {
         stillMute: ae === mute,
@@ -886,7 +924,7 @@ uiTest('hovering the control bar holds it visible and clicks hit controls', asyn
   const box = await waitFor(
     send,
     `(function(){
-      const el = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const el = document.querySelector('.control-bar .ctl-mute');
       if (!el) return null;
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return null;
@@ -968,7 +1006,7 @@ uiTest('spurious pointerleave inside the bar does not drop geometric hover hold'
   const box = await waitFor(
     send,
     `(function(){
-      const el = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const el = document.querySelector('.control-bar .ctl-mute');
       if (!el) return null;
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return null;
@@ -979,7 +1017,7 @@ uiTest('spurious pointerleave inside the bar does not drop geometric hover hold'
     send,
     `(function(){
       const bar = document.querySelector('.control-bar');
-      const mute = document.querySelector('.control-bar [aria-label="Couper le son"]');
+      const mute = document.querySelector('.control-bar .ctl-mute');
       const x = ${Number(box.x)};
       const y = ${Number(box.y)};
       const move = (from) => new PointerEvent('pointermove', {
@@ -1224,7 +1262,7 @@ uiTest('progress arrow keys seek once, not doubled by the document handler', asy
   );
 });
 
-const MUTE_SELECTOR = '.control-bar button[aria-label="Couper le son"]';
+const MUTE_SELECTOR = '.control-bar .ctl-mute';
 
 uiTest('keyboard focus on the control bar holds it visible', async (t) => {
   const { send } = await openPlayer(t, { width: 844, height: 390, landscape: true });
@@ -1272,14 +1310,14 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
   await evaluate(
     send,
     `(function(){
-      const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
+      const btn = document.querySelector('.ctl-fs');
       if (!btn) throw new Error('missing fullscreen button');
       btn.focus({ focusVisible: true });
     })()`
   );
   let focused = await evaluate(
     send,
-    'document.activeElement?.getAttribute("aria-label") === "Plein écran"'
+    'document.activeElement?.classList.contains("ctl-fs")'
   );
   assert.equal(focused, true);
   await new Promise((r) => setTimeout(r, 2500));
@@ -1288,7 +1326,7 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
   await evaluate(
     send,
     `(function(){
-      const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
+      const btn = document.querySelector('.ctl-fs');
       if (btn) btn.blur();
     })()`
   );
@@ -1307,7 +1345,7 @@ uiTest('hiding the toolbar blurs bar controls so Space pauses', async (t) => {
   const canFocusHidden = await evaluate(
     send,
     `(function(){
-      const btn = document.querySelector('.player-container button[aria-label="Plein écran"]');
+      const btn = document.querySelector('.ctl-fs');
       btn.focus();
       return document.activeElement === btn;
     })()`
@@ -1330,8 +1368,8 @@ uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) =>
   await clickFullscreen(send);
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true);
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `(function(){
@@ -1347,7 +1385,7 @@ uiTest('rapid fullscreen re-enter ignores a leftover native leave', async (t) =>
   assert.equal(ui.nativeFs, true, 'after leftover native leaves, re-request must adopt native');
   assert.equal(ui.fakeFs, false, 'rapid re-enter must not drop to overlay');
   assert.equal(ui.fs, true);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.equal(ui.fsRequests, 2, 'leftover leave must issue exactly one new native request');
 });
 
@@ -1355,19 +1393,19 @@ uiTest('second fullscreen toggle during leftover wait exits native', async (t) =
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed-slow-exit');
   await clickFullscreen(send);
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
+  await tapSelector(send, '.ctl-fs');
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true, 'leftover native is still on screen during leftover wait');
   assert.equal(ui.fs, false, 'leftover wait has not adopted native yet');
   assert.equal(ui.fsRequests, 1, 'leftover enter must not re-request while native is still assigned');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran', 'leftover wait must offer exit, not a second enter');
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT, 'leftover wait must offer exit, not a second enter');
+  await tapSelector(send, '.ctl-fs');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false, 'second toggle during leftover wait must exit');
   assert.equal(ui.fakeFs, false);
   assert.equal(ui.htmlFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
   await new Promise((r) => setTimeout(r, 400));
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false, 'leftover bound must not overlay after the user exited');
@@ -1382,8 +1420,8 @@ uiTest('leftover timer resumes native if leftover already left', async (t) => {
   // Pause leftover rAF so a silent leftover leave is only seen by the 400ms
   // bound — background tabs pause rAF the same way.
   await evaluate(send, 'window.requestAnimationFrame = function() { return 0; }');
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `(function(){
@@ -1399,7 +1437,7 @@ uiTest('leftover timer resumes native if leftover already left', async (t) => {
   assert.equal(ui.nativeFs, true, 'leftover timer must resume native after a silent leftover leave');
   assert.equal(ui.fakeFs, false, 'cleared leftover must not apply overlay');
   assert.equal(ui.fs, true);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.equal(ui.fsRequests, 2);
 });
 
@@ -1409,8 +1447,8 @@ uiTest('hung leftover native exit falls back to overlay instead of stalling', as
   await clickFullscreen(send);
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true);
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
+  await tapSelector(send, '.ctl-fs');
   // Poll-only dismiss would wait 50ms; freeze setInterval so only the
   // immediate overlay-apply tick can call exitFullscreen.
   await evaluate(send, 'window.setInterval = function() { return 0; }');
@@ -1421,16 +1459,16 @@ uiTest('hung leftover native exit falls back to overlay instead of stalling', as
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fakeFs, true, 'hung leftover native must not stall waitingNativeFs forever');
   assert.equal(ui.fs, true);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.ok(
     ui.fsExits >= 2,
     'overlay must dismiss leftover native immediately, not on the first 50ms poll'
   );
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false, 'after leftover overlay, toggle must be able to exit');
   assert.equal(ui.fakeFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
 });
 
 uiTest('center double-tap toggles native-first fullscreen; single tap still pauses', async (t) => {
@@ -1578,7 +1616,7 @@ uiTest('native fullscreen is used on a portrait phone when the API works', async
   assert.equal(ui.fakeFs, false, 'successful native fullscreen must not use the CSS overlay');
   assert.equal(ui.forcedLandscape, false, 'do not CSS-rotate native fullscreen in portrait');
   assert.equal(ui.fsIcon, '#i-exit-fullscreen', 'native fullscreen swaps to the exit glyph');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.equal(ui.fsHasTip, true);
 });
 
@@ -1593,22 +1631,22 @@ uiTest('overlay fallback when native fullscreen is a no-op', async (t) => {
   assert.equal(ui.fakeFs, true, 'no-op native request must fall back to the CSS overlay');
   assert.equal(ui.forcedLandscape, true, 'portrait fake-fullscreen rotates onto the long edge');
   assert.equal(ui.fsIcon, '#i-exit-fullscreen', 'overlay fullscreen swaps to the exit glyph');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   const longEdge = Math.max(ui.player.w, ui.player.h);
   assert.ok(longEdge > 800, `expected landscape span, got ${longEdge}`);
-  await tapSelector(send, 'button[aria-label="Quitter le plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false);
   assert.equal(ui.fsIcon, '#i-fullscreen', 'leaving overlay restores the enter glyph');
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
 });
 
 uiTest('second fullscreen tap during native wait does not abort overlay fallback', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'noop');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await evaluate(
     send,
     `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }))`
@@ -1622,13 +1660,13 @@ uiTest('second fullscreen tap during native wait does not abort overlay fallback
   assert.equal(ui.fs, true);
   assert.equal(ui.htmlFs, true);
   assert.equal(ui.nativeFs, false);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-delayed');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
   await new Promise((r) => setTimeout(r, 50));
   let ui = await evaluate(send, SNAPSHOT);
@@ -1637,7 +1675,7 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
   assert.equal(ui.fakeFs, false, 'must not overlay before delayed webkitFullscreenElement is assigned');
   assert.equal(ui.forcedLandscape, false, 'must not rotate during the native wait');
   assert.equal(ui.nativeFs, false, 'webkit assignment is still pending');
-  assert.equal(ui.fsLabel, 'Plein écran', 'do not claim fullscreen until native or overlay lands');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER, 'do not claim fullscreen until native or overlay lands');
   await waitFor(
     send,
     `(function(){
@@ -1656,7 +1694,7 @@ uiTest('delayed webkit fullscreen is not treated as a no-op', async (t) => {
 uiTest('late native fullscreen does not override overlay fallback', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-late');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
@@ -1673,14 +1711,14 @@ uiTest('late native fullscreen does not override overlay fallback', async (t) =>
   assert.equal(ui.htmlFs, true);
   assert.equal(ui.nativeFs, false, 'late native under overlay must be cancelled');
   assert.ok(ui.fsExits >= 1, 'late native under overlay must call exitFullscreen');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.equal(ui.forcedLandscape, true, 'phone overlay in portrait keeps forced landscape');
 });
 
 uiTest('async exit under overlay keeps rotate and does not re-exit', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-late-async-exit');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
@@ -1704,13 +1742,13 @@ uiTest('async exit under overlay keeps rotate and does not re-exit', async (t) =
   assert.equal(ui.nativeFs, false);
   assert.equal(ui.forcedLandscape, true);
   assert.equal(ui.fsExits, 1, 'watch must not hammer exitFullscreen after the first dismiss');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 uiTest('silent native assign after the 900ms watch cap is still cancelled', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-after-watch-silent');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
@@ -1726,13 +1764,13 @@ uiTest('silent native assign after the 900ms watch cap is still cancelled', asyn
   assert.equal(ui.forcedLandscape, true);
   assert.equal(ui.nativeFs, false, 'overlay watch must still dismiss silent native after 900ms');
   assert.ok(ui.fsExits >= 1);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 uiTest('silent late webkit assign does not snap overlay to native', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-late-silent');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `document.querySelector('.player-container')?.classList.contains('is-fake-fullscreen') === true`
@@ -1745,13 +1783,13 @@ uiTest('silent late webkit assign does not snap overlay to native', async (t) =>
   assert.equal(ui.htmlFs, true);
   assert.equal(ui.nativeFs, false, 'silent late native under overlay must be cancelled');
   assert.ok(ui.fsExits >= 1, 'silent late native under overlay must call exitFullscreen');
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 uiTest('exiting during the grace window aborts a late native enter', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'webkit-delayed');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
   await evaluate(
     send,
@@ -1760,21 +1798,21 @@ uiTest('exiting during the grace window aborts a late native enter', async (t) =
   let ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.fs, false);
   assert.equal(ui.htmlFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
   await waitFor(send, '(window.__fsExits ?? 0) >= 1');
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, false, 'late native enter after cancel must be exited');
   assert.equal(ui.fs, false);
   assert.equal(ui.htmlFs, false, 'player-fs must not return after cancel');
   assert.equal(ui.fakeFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
   assert.ok(ui.fsExits >= 1);
 });
 
 uiTest('system leave during grace does not apply overlay fallback', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed-then-leave');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(
     send,
     `(function(){
@@ -1797,13 +1835,13 @@ uiTest('system leave during grace does not apply overlay fallback', async (t) =>
   assert.equal(ui.fakeFs, false, 'system leave during grace must not apply overlay');
   assert.equal(ui.forcedLandscape, false);
   assert.equal(ui.htmlFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
 });
 
 uiTest('brief native enter then leave during wait does not apply overlay', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'brief-enter-leave');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
   await new Promise((r) => setTimeout(r, 450));
   const ui = await evaluate(send, SNAPSHOT);
@@ -1813,13 +1851,13 @@ uiTest('brief native enter then leave during wait does not apply overlay', async
   assert.equal(ui.fakeFs, false, 'leave during wait must not apply overlay after grace');
   assert.equal(ui.forcedLandscape, false);
   assert.equal(ui.htmlFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
 });
 
 uiTest('async native enter then leave during wait does not apply overlay', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'async-brief-enter-leave');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
   await new Promise((r) => setTimeout(r, 450));
   const ui = await evaluate(send, SNAPSHOT);
@@ -1829,7 +1867,7 @@ uiTest('async native enter then leave during wait does not apply overlay', async
   assert.equal(ui.fakeFs, false, 'async leave during wait must not apply overlay after grace');
   assert.equal(ui.forcedLandscape, false);
   assert.equal(ui.htmlFs, false);
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
 });
 
 uiTest('center tap does not play while the series-end overlay is showing', async (t) => {
@@ -2013,8 +2051,9 @@ uiTest('next-episode chip appears near the end when a next file exists', async (
   assert.equal(ui.nextUp.hidden, false, 'chip is visible when a next episode exists');
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.nextUp.tag, 'BUTTON', 'next-up control must be a real button');
-  assert.equal(ui.nextUp.label, 'Épisode suivant');
+  assert.equal(ui.nextUp.label, TIP_NEXT);
   assert.equal(ui.nextUp.hasTip, true);
+  assert.equal(ui.nextUp.title, null);
   assert.equal(ui.nextUp.text, '', 'chip is icon-only');
   assert.equal(ui.nextUp.icon, '#i-next');
   assert.equal(ui.nextUp.prev.hidden, true, 'first episode has no previous chip');
@@ -2074,7 +2113,7 @@ uiTest('next-episode chip is hidden when there is no next episode', async (t) =>
   assert.equal(ui.nextUp.isEnd, false);
   assert.equal(ui.bar.nextVisible, false, 'toolbar next control stays hidden without a next file');
   assert.equal(ui.bar.prevVisible, true, 'last episode still offers previous');
-  assert.equal(ui.prevCtl.label, 'Épisode précédent');
+  assert.equal(ui.prevCtl.label, TIP_PREV);
   assert.equal(ui.prevCtl.hasTip, true);
   assert.equal(ui.prevCtl.text, '', 'previous is icon-only');
   assert.equal(ui.prevCtl.icon, '#i-prev');
@@ -2122,7 +2161,7 @@ function overlayFsKeptOn(ep) {
 uiTest('next during native grace does not let the old request drop remount FS', async (t) => {
   const { send } = await openPlayer(t, { width: 390, height: 844, landscape: false });
   await installFullscreenStub(send, 'succeed-deferred');
-  await tapSelector(send, 'button[aria-label="Plein écran"]');
+  await tapSelector(send, '.ctl-fs');
   await waitFor(send, '(window.__fsRequests ?? 0) >= 1');
   const exitsAtHop = await evaluate(send, 'window.__fsExits ?? 0');
   await tapSelector(send, '.ctl-next');
@@ -2158,7 +2197,7 @@ uiTest('next and previous keep native fullscreen across the remount', async (t) 
   assert.equal(ui.fs, true);
   assert.equal(ui.fakeFs, false);
   assert.equal(ui.forcedLandscape, false);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.equal(ui.fsIcon, '#i-exit-fullscreen');
   assert.ok(ui.fsRequests > requestsAtFull, 're-request native FS on the new container');
   await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
@@ -2169,7 +2208,7 @@ uiTest('next and previous keep native fullscreen across the remount', async (t) 
   assert.equal(ui.nativeFs, true, 'native FS must survive previous-episode remount');
   assert.equal(ui.fs, true);
   assert.equal(ui.fakeFs, false);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 uiTest('next chip and previous keep overlay fullscreen across the remount', async (t) => {
@@ -2196,7 +2235,7 @@ uiTest('next chip and previous keep overlay fullscreen across the remount', asyn
   assert.equal(ui.fakeFs, true);
   assert.equal(ui.nativeFs, false);
   assert.equal(ui.forcedLandscape, true);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
   assert.equal(ui.fsIcon, '#i-exit-fullscreen');
   assert.equal(ui.fsRequests, requestsAtFull, 'overlay hop must not re-enter the native wait');
   await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
@@ -2207,7 +2246,7 @@ uiTest('next chip and previous keep overlay fullscreen across the remount', asyn
   assert.equal(ui.fakeFs, true, 'overlay FS must survive previous-episode remount');
   assert.equal(ui.fs, true);
   assert.equal(ui.forcedLandscape, true);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 uiTest('ended auto-chain keeps native fullscreen', async (t) => {
@@ -2234,7 +2273,7 @@ uiTest('ended auto-chain keeps native fullscreen', async (t) => {
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nativeFs, true, 'ended auto-chain must stay in native fullscreen');
   assert.equal(ui.fakeFs, false);
-  assert.equal(ui.fsLabel, 'Quitter le plein écran');
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
 });
 
 const FS_CHROME_CLEARED = `(() => {
@@ -2369,12 +2408,14 @@ uiTest('near-end chips pair previous and next as icon-only controls', async (t) 
   ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.nextUp.hidden, false);
   assert.equal(ui.nextUp.prev.hidden, false, 'previous chip sits with the next chip');
-  assert.equal(ui.nextUp.prev.label, 'Épisode précédent');
+  assert.equal(ui.nextUp.prev.label, TIP_PREV);
   assert.equal(ui.nextUp.prev.hasTip, true);
+  assert.equal(ui.nextUp.prev.title, null);
   assert.equal(ui.nextUp.prev.text, '', 'previous chip is icon-only');
   assert.equal(ui.nextUp.prev.icon, '#i-prev');
-  assert.equal(ui.nextUp.label, 'Épisode suivant');
+  assert.equal(ui.nextUp.label, TIP_NEXT);
   assert.equal(ui.nextUp.hasTip, true);
+  assert.equal(ui.nextUp.title, null);
   assert.equal(ui.nextUp.text, '', 'next chip is icon-only');
   assert.equal(ui.nextUp.icon, '#i-next');
   await clickSelector(send, '.prev-up-btn');
@@ -2391,16 +2432,142 @@ uiTest('episode chrome tooltips are French aria-labels, not visible text', async
   const ui = await evaluate(send, SNAPSHOT);
   assert.equal(ui.prevCtl.text, '');
   assert.equal(ui.nextCtl.text, '');
-  assert.equal(ui.prevCtl.label, 'Épisode précédent');
-  assert.equal(ui.nextCtl.label, 'Épisode suivant');
-  assert.equal(ui.fsLabel, 'Plein écran');
+  assert.equal(ui.prevCtl.label, TIP_PREV);
+  assert.equal(ui.nextCtl.label, TIP_NEXT);
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
   assert.equal(ui.fsHasTip, true);
+  assert.equal(ui.fsTitle, null, 'T1: no native title= on fullscreen');
   assert.equal(ui.prevCtl.hasTip, true);
   assert.equal(ui.nextCtl.hasTip, true);
+  assert.equal(ui.prevCtl.title, null);
+  assert.equal(ui.nextCtl.title, null);
   assert.match(ui.prevCtl.tip, /Épisode précédent/);
+  assert.match(ui.prevCtl.tip, /Page précédente/);
   assert.match(ui.nextCtl.tip, /Épisode suivant/);
+  assert.match(ui.nextCtl.tip, /Page suivante/);
   const fsTip = await evaluate(send, 'getComputedStyle(document.querySelector(".ctl-fs"), "::after").content');
   assert.match(fsTip, /Plein écran/);
+  assert.match(fsTip, /raccourci : F/);
+  assert.equal(ui.muteCtl.hasTip, true);
+  assert.equal(ui.muteCtl.title, null, 'T1: no native title= on mute');
+  assert.equal(ui.muteCtl.label, TIP_MUTE);
+  assert.equal(ui.volumeCtl.wrapHasTip, true);
+  assert.equal(ui.volumeCtl.wrapTitle, null);
+  assert.equal(ui.volumeCtl.inputTitle, null);
+  assert.equal(ui.volumeCtl.wrapLabel, TIP_VOLUME_UP);
+  assert.equal(ui.volumeCtl.inputLabel, TIP_VOLUME_DOWN);
+});
+
+uiTest('mute toggle and fullscreen labels document their shortcuts', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  let ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_MUTE);
+  assert.equal(ui.fsLabel, TIP_FS_ENTER);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_UNMUTE);
+  const muted = await evaluate(send, 'Boolean(document.querySelector("video")?.muted)');
+  assert.equal(muted, true);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }))`
+  );
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.muteCtl.label, TIP_MUTE);
+  await installFullscreenStub(send, 'succeed');
+  await clickFullscreen(send);
+  ui = await evaluate(send, SNAPSHOT);
+  assert.equal(ui.fsLabel, TIP_FS_EXIT);
+  assert.match(ui.fsLabel, /raccourci : F/);
+  assert.equal(ui.fsTitle, null);
+});
+
+uiTest('PageDown and PageUp hop episodes and no-op without a sibling', async (t) => {
+  const { send } = await openPlayer(
+    t,
+    { width: 900, height: 600 },
+    { phone: false, extraFiles: ['Serie/e00.mp4'] }
+  );
+  await waitFor(send, 'document.querySelector(".ctl-prev") && !document.querySelector(".ctl-prev").hidden');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true }))`
+  );
+  await waitFor(send, 'location.hash.includes("e02")');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true }))`
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  let hash = await evaluate(send, 'location.hash');
+  assert.match(hash, /e02/, 'PageDown on the last episode must not leave the series');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true, cancelable: true }))`
+  );
+  await waitFor(send, 'location.hash.includes("e01")');
+  await evaluate(
+    send,
+    `location.hash = ${JSON.stringify('#/lukluk/play/Serie/e00.mp4')}`
+  );
+  await waitFor(send, 'location.hash.includes("e00") && Boolean(document.querySelector("video"))');
+  await waitFor(send, 'document.querySelector(".ctl-prev") && document.querySelector(".ctl-prev").hidden');
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true, cancelable: true }))`
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  hash = await evaluate(send, 'location.hash');
+  assert.match(hash, /e00/, 'PageUp on the first episode is a no-op');
+});
+
+uiTest('ArrowUp and ArrowDown adjust volume; text inputs keep their keys', async (t) => {
+  const { send } = await openPlayer(t, { width: 900, height: 600 }, { phone: false });
+  await loopAndPlay(send);
+  await evaluate(
+    send,
+    `(function(){
+      const v = document.querySelector('video');
+      v.volume = 0.5;
+      v.muted = false;
+      v.dispatchEvent(new Event('volumechange'));
+    })()`
+  );
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))`
+  );
+  let vol = await evaluate(send, 'document.querySelector("video").volume');
+  assert.equal(vol, 0.5 + VOLUME_STEP);
+  await evaluate(
+    send,
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))`
+  );
+  vol = await evaluate(send, 'document.querySelector("video").volume');
+  assert.equal(vol, 0.5);
+  const stolen = await evaluate(
+    send,
+    `(function(){
+      const input = document.createElement('input');
+      input.type = 'text';
+      document.body.appendChild(input);
+      input.focus();
+      const before = location.hash;
+      input.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'PageDown',
+        bubbles: true,
+        cancelable: true,
+      }));
+      const hash = location.hash;
+      input.remove();
+      return { before, hash };
+    })()`
+  );
+  assert.equal(stolen.hash, stolen.before, 'PageDown must not hop while a text input is focused');
 });
 
 uiTest('next-episode chip hides after seeking back out of the end window', async (t) => {
@@ -2984,6 +3151,39 @@ uiTest('cast click still prompts after an in-flight mint', async (t) => {
   assert.match(ui.videoSrc, /\/api\/media\/Serie\/e01\.mp4/);
   assert.match(ui.videoSrc, /[?&]sig=/);
   assert.match(await evaluate(send, 'location.hash'), /e01/, 'must not have auto-chained off the minting episode');
+});
+
+test('playerKeyCommand maps watching shortcuts and ignores typing targets', () => {
+  assert.equal(VOLUME_STEP, 0.05);
+  assert.equal(TIP_MUTE, 'Couper le son (raccourci : Contrôle + flèche en bas)');
+  assert.equal(TIP_UNMUTE, 'Réactiver le son (raccourci : Contrôle + flèche haut)');
+  const body = { tagName: 'BODY' };
+  const cmd = (key, extra = {}) => playerKeyCommand({ key, target: body, ctrlKey: false, altKey: false, ...extra });
+  assert.equal(cmd('PageDown'), 'nextEpisode');
+  assert.equal(cmd('PageUp'), 'prevEpisode');
+  assert.equal(cmd('ArrowUp'), 'volumeUp');
+  assert.equal(cmd('ArrowDown'), 'volumeDown');
+  assert.equal(cmd('ArrowDown', { ctrlKey: true }), 'mute');
+  assert.equal(cmd('ArrowUp', { ctrlKey: true }), 'unmute');
+  assert.equal(cmd('f'), 'toggleFull');
+  assert.equal(cmd('F'), 'toggleFull');
+  assert.equal(cmd('ArrowUp', { altKey: true }), null);
+  assert.equal(cmd('ArrowLeft'), 'seekBack');
+  assert.equal(cmd(' '), 'togglePlay');
+  assert.equal(
+    cmd(' ', { target: { tagName: 'BUTTON', closest: (sel) => (sel === 'button' ? {} : null) } }),
+    null,
+    'Space on a button must not double-toggle'
+  );
+  const text = { tagName: 'INPUT', type: 'text' };
+  assert.equal(isPlayerTypingTarget(text), true);
+  assert.equal(playerKeyCommand({ key: 'PageDown', target: text }), null);
+  const range = { tagName: 'INPUT', type: 'range' };
+  assert.equal(isPlayerTypingTarget(range), false);
+  assert.equal(playerKeyCommand({ key: 'ArrowUp', target: range, ctrlKey: false, altKey: false }), 'volumeUp');
+  assert.equal(isPlayerTypingTarget({ tagName: 'TEXTAREA' }), true);
+  assert.equal(isPlayerTypingTarget({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(isPlayerTypingTarget({ tagName: 'DIV' }), false);
 });
 
 test('notePointerPosition ignores the seed event and zero-delta moves', () => {

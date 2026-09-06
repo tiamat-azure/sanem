@@ -1190,7 +1190,8 @@ button.center-play:focus-visible {
 
 @media (hover: hover) and (pointer: fine) {
   .has-tip:hover::after,
-  .has-tip:focus-visible::after {
+  .has-tip:focus-visible::after,
+  .volume-wrap.has-tip:focus-within::after {
     opacity: 1;
   }
 }
@@ -1260,6 +1261,13 @@ button.center-play:focus-visible {
   transform: translate(-50%, -50%);
 }
 
+.volume-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  width: 90px;
+}
+
 .volume {
   width: 90px;
   flex-shrink: 0;
@@ -1273,6 +1281,7 @@ button.center-play:focus-visible {
 /* --- Breakpoints --- */
 
 @media (max-width: 1023px) {
+  .volume-wrap,
   .volume {
     display: none;
   }
@@ -1294,6 +1303,7 @@ button.center-play:focus-visible {
   .rail-track {
     grid-auto-columns: 38vw;
   }
+  .volume-wrap,
   .volume {
     display: none;
   }
